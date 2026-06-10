@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Deserialize)]
@@ -16,7 +16,7 @@ pub struct Config {
     pub strategy: Strategy,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub enum Strategy {
     #[serde(rename = "independent")]
     Independent,

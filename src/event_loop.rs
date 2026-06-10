@@ -1,10 +1,10 @@
 use tokio::sync::mpsc;
 
-use crate::models::LogEvent;
+use crate::models::PollEvent;
 use crate::sender::EventSender;
 
 pub async fn handle_events(
-    mut rx: mpsc::Receiver<LogEvent>,
+    mut rx: mpsc::Receiver<PollEvent>,
     mut senders: Vec<Box<dyn EventSender + Send>>,
 ) {
     while let Some(event) = rx.recv().await {

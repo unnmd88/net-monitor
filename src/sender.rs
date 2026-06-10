@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
-use crate::models::{Envelope, LogEvent, TestType};
+use crate::models::{Envelope, PollEvent, TestType};
 use async_fd_lock::LockWrite;
 use async_trait::async_trait;
 use tokio::{fs::OpenOptions, io::AsyncWriteExt};
 
 #[async_trait]
 pub trait EventSender {
-    async fn send(&self, event: LogEvent) -> Result<(), String>;
+    async fn send(&self, event: PollEvent) -> Result<(), String>;
 }
 
 pub struct JsonSender {
@@ -32,7 +32,7 @@ impl JsonSender {
 
 #[async_trait]
 impl EventSender for JsonSender {
-    async fn send(&self, event: LogEvent) -> Result<(), String> {
+    async fn send(&self, event: PollEvent) -> Result<(), String> {
         let envelope = Envelope {
             session_id: self.session_id.clone(),
             timestamp: chrono::Utc::now().to_rfc3339(),

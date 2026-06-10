@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::{
     config::{Config, Strategy},
     icmp::{IcmpPoller, TracertPoller},
-    models::LogEvent,
+    models::{LogEvent, PollEvent},
     poller::Poller,
     sender::{EventSender, JsonSender},
     snmp::SnmpPoller,
@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Каналы
-    let (tx_log, rx_log) = mpsc::channel::<LogEvent>(256);
+    let (tx_log, rx_log) = mpsc::channel::<PollEvent>(256);
 
     let session_id = Uuid::new_v4();
 
