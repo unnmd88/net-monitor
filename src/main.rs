@@ -9,20 +9,21 @@ mod snmp;
 mod traits;
 mod utils;
 
-use std::time::Duration;
-
 use ftr::socket::factory;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 use tracing_appender;
 use tracing_subscriber;
+use uuid::Uuid;
 
 use crate::{
     config::{Config, Strategy},
-    icmp::{IcmpPoller, Tracert},
-    models::TestEvent,
+    icmp::{IcmpPoller, TracertPoller},
+    models::LogEvent,
     poller::Poller,
-    sender::EventSender,
+    sender::{EventSender, JsonSender},
+    snmp::SnmpPoller,
 };
 
 fn load_config(path: &str) -> Result<Config, String> {
@@ -90,22 +91,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Каналы
-    let (tx_log, rx_log) = mpsc::channel::<TestEvent>(256);
+    let (tx_log, rx_log) = mpsc::channel::<LogEvent>(256);
 
-    let mut metadata: Vec<String> = Vec::new();
-    metadata.push("Конфигурация опроса".to_string());
-    metadata.push(format!("ip: {:?}\n", config));
+    let session_id = Uuid::new_v4();
 
-    let mut csv = sender::CsvSender::new(&config.output.csv_path).await?;
+    let json_sender =
+        match JsonSender::new(&config.log, session_id.to_string()).await {
+            Ok(sender) => sender,
+            Err(e) => {
+                error!("{e}");
+                std::process::exit(1);
+            }
+        };
 
-    let mut txt = sender::TxtSender::new(&config.output.txt_path).await?;
-
-    for m in metadata {
-        csv.write_line(&m).await;
-        txt.write_line(&m).await;
-    }
-    let senders: Vec<Box<dyn EventSender + Send>> =
-        vec![Box::new(csv), Box::new(txt)];
+    let senders: Vec<Box<dyn EventSender + Send>> = vec![Box::new(json_sender)];
 
     // Запускаем обработчик событий
     tokio::spawn(event_loop::handle_events(rx_log, senders));
@@ -115,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Strategy::Independent => {
             if config.independent.ping.enabled {
                 let tracert = if config.ping.fallback_tracert {
-                    match Tracert::new(
+                    match TracertPoller::new(
                         config.network.target.clone(),
                         config.tracert.max_hops,
                         config.tracert.probe_timeout_seconds,
@@ -150,7 +149,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 tokio::spawn(real_poller.run());
 
-                info!("ICMP опрос запущен");
+                info!("Независимый ICMP опрос запущен");
+            }
+
+            if config.independent.snmp.enabled {
+                let snmp_poller = match SnmpPoller::new(
+                    config.network.target,
+                    config.snmp.port,
+                    config.snmp.community,
+                    config.snmp.oids,
+                    config.independent.snmp.interval_seconds,
+                    config.snmp.timeout_seconds,
+                    config.snmp.retries,
+                )
+                .await
+                {
+                    Ok(snmp_poller) => snmp_poller,
+                    Err(e) => {
+                        error!("Ошибка создания опроса snmp: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                let real_snmp_poller = Poller::new(
+                    snmp_poller,
+                    config.independent.snmp.interval_seconds,
+                    tx_log.clone(),
+                );
+                tokio::spawn(real_snmp_poller.run());
+                info!("Независимый SNMP опрос запущен");
             }
 
             //  if config.independent.snmp.enabled {

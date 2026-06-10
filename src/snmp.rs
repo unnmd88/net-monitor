@@ -1,98 +1,112 @@
 use async_snmp::{Auth, Client, Oid, Retry};
+use async_trait::async_trait;
 use chrono::Local;
+use std::net::IpAddr;
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{self, Instant};
 use tracing::error;
 
 use crate::constants::{DATE_FMT, TIME_FMT};
-use crate::models::{TestEvent, TestType};
+use crate::models::{LogEvent, TestType};
+use crate::traits::Pollable;
 use crate::utils::{get_fmt_current_time, validate_oids};
 
-pub async fn snmp_task(
-    target: String,
+pub struct SnmpPoller {
+    target: IpAddr,
     port: u16,
-    community: String,
-    oids: Vec<String>,
-    interval_secs: u64,
-    timeout_secs: u64,
-    retries: u32,
-    tx_log: mpsc::Sender<TestEvent>,
-) {
-    let mut interval = time::interval(Duration::from_secs(interval_secs));
+    client: Client,
+    oids: Vec<Oid>,
+    // target: IpAddr,
+    // port: u16,
+    // community: String,
+    // oids: Vec<String>,
+    // interval_secs: u64,
+    // timeout_secs: u64,
+    // retries: u32,
+}
 
-    if let Err(message) = validate_oids(&oids) {
-        error!("{}", message);
-        std::process::exit(1);
-    }
-
-    let parsed_oids = match create_oids(&oids) {
-        Ok(good_oids) => good_oids,
-        Err(message) => {
-            error!("{}", message);
-            std::process::exit(1);
-        }
-    };
-
-    let client =
-        match Client::builder((target.as_str(), port), Auth::v2c(&community))
-            .timeout(Duration::from_secs(timeout_secs))
-            .retry(Retry::fixed(retries, Duration::ZERO))
-            .connect()
-            .await
+impl SnmpPoller {
+    pub async fn new(
+        target: IpAddr,
+        port: u16,
+        community: String,
+        oids: Vec<String>,
+        interval_seconds: u64,
+        timeout_seconds: u64,
+        retries: u32,
+    ) -> Result<Self, String> {
+        let client = match Client::builder(
+            (target.to_string(), port),
+            Auth::v2c(&community),
+        )
+        .timeout(Duration::from_secs(timeout_seconds))
+        .retry(Retry::fixed(retries, Duration::ZERO))
+        .connect()
+        .await
         {
             Ok(c) => c,
             Err(e) => {
-                error!(
+                return Err(format!(
                     "SNMP: failed to connect to {}:{} — {}",
                     target, port, e
-                );
-                std::process::exit(1);
+                ));
             }
         };
 
-    loop {
-        interval.tick().await;
+        let oids = create_oids(&oids)?;
+
+        Ok(Self {
+            target,
+            port,
+            client,
+            oids,
+        })
+    }
+
+    pub async fn get_many(&self) -> LogEvent {
+        let now = Local::now();
         let start = Instant::now();
 
-        let now = Local::now();
-        let date = now.format(DATE_FMT).to_string();
         let req_start = now.format(TIME_FMT).to_string();
-        let result = client.get_many(&parsed_oids).await;
+        let result = self.client.get_many(&self.oids).await;
         let req_end = Local::now()
             .format(TIME_FMT)
             .to_string();
-        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+
+        let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
 
         let (success, details) = match result {
             Ok(results) => {
                 let values = results
                     .iter()
-                    .map(|r| format!("{}={:?}", r.oid, r.value))
+                    .map(|varbind| {
+                        format!("{}={:?}", varbind.oid, varbind.value)
+                    })
                     .collect::<Vec<_>>()
                     .join(" | ");
-                (true, Some(format!("{}", values)))
+                (true, format!("{}", values))
             }
-            Err(e) => (false, Some(format!("SNMP error: {}", e))),
+            Err(e) => (false, format!("SNMP error: {}", e)),
         };
 
-        if tx_log
-            .send(TestEvent {
-                date,
-                target: target.clone(),
-                start: req_start,
-                end: req_end,
-                test_type: TestType::Snmp,
-                success,
-                latency_ms: elapsed,
-                details,
-            })
-            .await
-            .is_err()
-        {
-            error!("SNMP: channel closed, exiting");
-            return;
+        LogEvent::PollResult {
+            target: self.target.to_string(),
+            start: req_start,
+            end: req_end,
+            test_type: TestType::Snmp,
+            success,
+            latency_ms,
+            details: Some(details),
         }
+    }
+}
+
+#[async_trait]
+impl Pollable for SnmpPoller {
+    async fn fetch(&self) -> LogEvent {
+        self.get_many().await
     }
 }
 

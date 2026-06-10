@@ -4,6 +4,7 @@ use ftr::{
     Ftr, ProbeProtocol, TracerouteConfig, TracerouteConfigBuilder, traceroute,
 };
 use ping_async::{IcmpEchoRequestor, IcmpEchoStatus};
+use std::cell::RefCell;
 use std::fmt::format;
 use std::net::IpAddr;
 use std::time::Duration;
@@ -11,42 +12,27 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::{self, Instant};
 use tracing::error;
+use trippy_core::{Builder, ProbeStatus, Protocol};
 
 use crate::constants::{DATE_FMT, TIME_FMT};
-use crate::models::{TestEvent, TestType};
+use crate::models::{LogEvent, TestType};
 use crate::traits::Pollable;
 
-pub struct Tracert {
-    config: TracerouteConfig,
+pub struct TracertPoller {
     target: IpAddr,
     max_hops: u8,
     probe_timeout_seconds: u64,
     queries_per_hop: u8,
 }
 
-impl Tracert {
+impl TracertPoller {
     pub fn new(
         target: IpAddr,
         max_hops: u8,
         probe_timeout_seconds: u64,
         queries_per_hop: u8,
     ) -> Result<Self, String> {
-        let config = match TracerouteConfigBuilder::new()
-            .target(target.to_string())
-            .protocol(ProbeProtocol::Icmp)
-            .max_hops(max_hops)
-            .queries_per_hop(queries_per_hop) // или .queries(1) в зависимости от версии
-            .probe_timeout(Duration::from_millis(probe_timeout_seconds * 2000))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                return Err(format!("Ошибка конфигурации traceroute: {}", e));
-            }
-        };
-
         Ok(Self {
-            config,
             target,
             max_hops,
             probe_timeout_seconds,
@@ -54,108 +40,75 @@ impl Tracert {
         })
     }
 
-    pub async fn _traceroute(&self) -> String {
-        let ftr = Ftr::new();
+    pub async fn traceroute(&self) -> String {
+        let mut output = String::new();
 
-        let result = match ftr
-            .trace_with_config(self.config.clone())
-            .await
+        let tracer = match Builder::new(self.target)
+            .protocol(Protocol::Icmp)
+            .first_ttl(1)
+            .max_ttl(self.max_hops)
+            .max_rounds(Some(self.queries_per_hop as usize))
+            .build()
         {
-            Ok(r) => r,
-            Err(e) => {
-                return format!("\n=== TRACEROUTE ERROR ===\n{}", e);
-            }
+            Ok(t) => t,
+            Err(e) => return format!("Ошибка создания трассировщика: {}", e),
         };
 
-        if result.hops.is_empty() {
-            return "\n=== TRACEROUTE ===\nNo hops recorded".to_string();
+        if let Err(e) = tracer.run() {
+            return format!("Ошибка выполнения трассировки: {}", e);
         }
 
-        let mut output = String::from("\n=== TRACEROUTE ===\n");
+        let state = tracer.snapshot();
 
-        for hop in result.hops.iter() {
-            let rtt_str = match hop.rtt {
-                Some(d) => format!("{:.2}", d.as_secs_f64() * 1000.0),
-                None => "*".to_string(),
+        output.push_str(&format!("\n=== Traceroute to {} ===\n", self.target));
+        output.push_str(&format!(
+            "{:<3} {:<20} {:<15} {:<10}\n",
+            "TTL", "Address", "Avg RTT (ms)", "Loss%"
+        ));
+        output.push_str(&"-".repeat(60));
+        output.push('\n');
+
+        for hop in state.hops() {
+            let ttl = hop.ttl();
+
+            // addrs() возвращает итератор, берём первый адрес
+            let addr = hop
+                .addrs()
+                .next()
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| "*".to_string());
+
+            // avg_ms() возвращает f64 напрямую
+            let rtt = hop.avg_ms();
+            let rtt_str = if rtt > 0.0 {
+                format!("{:.2}", rtt)
+            } else {
+                "---".to_string()
             };
 
-            let addr_str = match hop.addr {
-                Some(addr) => addr.to_string(),
-                None => "*".to_string(),
-            };
+            let loss = hop.loss_pct();
 
             output.push_str(&format!(
-                "{:2}. {} ({}ms)\n",
-                hop.ttl, addr_str, rtt_str
+                "{:<3} {:<20} {:<15} {:<10.1}%\n",
+                ttl, addr, rtt_str, loss
             ));
         }
 
         output
-    }
-
-    pub async fn traceroute(&self) -> String {
-        let target_str = self.target.to_string();
-
-        #[cfg(windows)]
-        let output = Command::new("tracert")
-            .arg("-d")
-            .arg("-h")
-            .arg(self.max_hops.to_string())
-            .arg("-w")
-            .arg((self.probe_timeout_seconds * 1000).to_string())
-            .arg(&target_str)
-            .output()
-            .await;
-
-        #[cfg(target_os = "linux")]
-        let output = Command::new("traceroute")
-            .arg("-I") // ICMP
-            .arg("-m")
-            .arg(self.max_hops.to_string())
-            .arg("-w")
-            .arg(self.probe_timeout_seconds.to_string())
-            .arg(&target_str)
-            .output()
-            .await;
-
-        #[cfg(target_os = "macos")]
-        let output = Command::new("traceroute")
-            .arg("-I") // ICMP
-            .arg("-m")
-            .arg(self.max_hops.to_string())
-            .arg("-w")
-            .arg(self.timeout_secs.to_string())
-            .arg(&target_str)
-            .output()
-            .await;
-
-        match output {
-            Ok(out) if out.status.success() => {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                format!("\n=== TRACEROUTE ===\n{}", stdout)
-            }
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                format!("\n=== TRACEROUTE ERROR ===\n{}", stderr)
-            }
-            Err(e) => {
-                format!("\n=== TRACEROUTE ERROR ===\n{}", e)
-            }
-        }
     }
 }
 
 pub struct IcmpPoller {
     target: IpAddr,
     requestor: IcmpEchoRequestor,
-    tracert: Option<Tracert>,
+    tracert: Option<TracertPoller>,
 }
 
 impl IcmpPoller {
     pub fn new(
         target: IpAddr,
         timeout_seconds: u64,
-        tracert: Option<Tracert>,
+        tracert: Option<TracertPoller>,
     ) -> Result<Self, String> {
         let requestor = IcmpEchoRequestor::new(
             target,
@@ -172,12 +125,11 @@ impl IcmpPoller {
         })
     }
 
-    pub async fn ping(&self) -> TestEvent {
+    pub async fn ping(&self) -> LogEvent {
         let target = self.target.to_string();
         let test_type = TestType::Ping;
 
         let now = Local::now();
-        let date = now.format(DATE_FMT).to_string();
         let started_at = now.format(TIME_FMT).to_string();
 
         let start_point = Instant::now();
@@ -190,9 +142,8 @@ impl IcmpPoller {
         let reply = match request {
             Ok(reply) => reply,
             Err(e) => {
-                return TestEvent {
+                return LogEvent::PollResult {
                     target,
-                    date,
                     start: started_at,
                     end: finished_at,
                     test_type,
@@ -240,9 +191,8 @@ impl IcmpPoller {
             }
             IcmpEchoStatus::Unknown => (false, format!("Ошибка запроса")),
         };
-        TestEvent {
+        LogEvent::PollResult {
             target,
-            date,
             start: started_at,
             end: finished_at,
             test_type,
@@ -251,32 +201,11 @@ impl IcmpPoller {
             details: Some(details),
         }
     }
-
-    //  async fn poll(
-    //      self,
-    //      interval_seconds: u64,
-    //      tx_log: mpsc::Sender<TestEvent>,
-    //      tx_diag: mpsc::Sender<()>,
-    //  ) {
-    //      let mut interval =
-    //          time::interval(Duration::from_secs(interval_seconds));
-
-    //      loop {
-    //          let ping_event = self.ping().await;
-
-    //          if let Err(e) = tx_log.send(ping_event).await {
-    //              error!("Failed to send log event: {}", e);
-    //              break;
-    //          }
-
-    //          interval.tick().await;
-    //      }
-    //  }
 }
 
 #[async_trait]
 impl Pollable for IcmpPoller {
-    async fn fetch(&self) -> TestEvent {
+    async fn fetch(&self) -> LogEvent {
         self.ping().await
     }
 }

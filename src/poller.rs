@@ -1,4 +1,4 @@
-use crate::{models::TestEvent, traits::Pollable};
+use crate::{models::LogEvent, traits::Pollable};
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -8,11 +8,11 @@ use tracing::error;
 pub struct Poller<T: Pollable> {
     task: T,
     interval: Duration,
-    tx: mpsc::Sender<TestEvent>,
+    tx: mpsc::Sender<LogEvent>,
 }
 
 impl<T: Pollable> Poller<T> {
-    pub fn new(task: T, interval: u64, tx: mpsc::Sender<TestEvent>) -> Self {
+    pub fn new(task: T, interval: u64, tx: mpsc::Sender<LogEvent>) -> Self {
         let interval = Duration::from_secs(interval);
         Self { task, interval, tx }
     }

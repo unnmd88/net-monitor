@@ -5,7 +5,8 @@ use tokio::sync::mpsc;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    pub output: OutputConfig,
+    //pub output: OutputConfig,
+    pub log: String,
     pub network: NetworkConfig,
     pub ping: PingConfig,
     pub tracert: TracertConfig,
@@ -27,11 +28,11 @@ pub enum Strategy {
 // ВЫХОДНЫЕ ФАЙЛЫ
 // ============================================
 
-#[derive(Debug, Deserialize)]
-pub struct OutputConfig {
-    pub csv_path: String,
-    pub txt_path: String,
-}
+//#[derive(Debug, Deserialize)]
+//pub struct OutputConfig {
+//    pub csv_path: String,
+//    pub txt_path: String,
+//}
 
 // ============================================
 // СЕТЕВЫЕ НАСТРОЙКИ
