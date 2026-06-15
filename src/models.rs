@@ -2,24 +2,36 @@ use std::{fmt, task::Poll};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::Strategy;
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
+pub enum Strategy {
+    #[serde(rename = "independent")]
+    Independent,
+    #[serde(rename = "synchronized")]
+    Synchronized,
+}
+
+impl fmt::Display for Strategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Strategy::Independent => "independent",
+            Strategy::Synchronized => "synchronized",
+        };
+        write!(f, "{}", s)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TestType {
+pub enum PollType {
     Ping,
     Snmp,
-    Trace,
-    Error,
 }
 
-impl fmt::Display for TestType {
+impl fmt::Display for PollType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TestType::Ping => write!(f, "PING"),
-            TestType::Snmp => write!(f, "SNMP"),
-            TestType::Trace => write!(f, "TRACE"),
-            TestType::Error => write!(f, "ERROR"),
+            PollType::Ping => write!(f, "PING"),
+            PollType::Snmp => write!(f, "SNMP"),
         }
     }
 }
@@ -30,7 +42,7 @@ pub struct TestEventOld {
     pub target: String,
     pub start: String,
     pub end: String,
-    pub test_type: TestType,
+    pub test_type: PollType,
     pub success: bool,
     pub latency_ms: f64,
     pub details: Option<String>,
@@ -38,6 +50,7 @@ pub struct TestEventOld {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Envelope {
+    #[serde(rename = "sid")]
     pub session_id: String,
     pub timestamp: String,
     #[serde(flatten)]
@@ -51,7 +64,7 @@ pub enum LogEvent {
         target: String,
         start: String,
         end: String,
-        test_type: TestType,
+        test_type: PollType,
         success: bool,
         latency_ms: f64,
         details: Option<String>,
@@ -60,7 +73,7 @@ pub enum LogEvent {
     Config {
         poll_interval_secs: u64,
         targets: Vec<String>,
-        test_types: Vec<TestType>,
+        test_types: Vec<PollType>,
         version: String,
     },
 

@@ -1,8 +1,10 @@
 use tokio::sync::mpsc;
+use tracing::instrument;
 
 use crate::models::PollEvent;
 use crate::sender::EventSender;
 
+#[instrument(skip_all)]
 pub async fn handle_events(
     mut rx: mpsc::Receiver<PollEvent>,
     mut senders: Vec<Box<dyn EventSender + Send>>,
@@ -10,9 +12,8 @@ pub async fn handle_events(
     while let Some(event) = rx.recv().await {
         for sender in &mut senders {
             if let Err(e) = sender.send(event.clone()).await {
-                tracing::error!(error = %e, "Dispatcher: send error");
+                tracing::error!(error = %e, "handle_events: send error");
             }
         }
     }
-    tracing::info!("Dispatcher: exiting");
 }

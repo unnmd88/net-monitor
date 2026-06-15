@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use crate::models::{Envelope, PollEvent, TestType};
+use crate::{
+    models::{Envelope, PollEvent, PollType},
+    utils::get_timestamp_fmt,
+};
 use async_fd_lock::LockWrite;
 use async_trait::async_trait;
 use tokio::{fs::OpenOptions, io::AsyncWriteExt};
@@ -35,7 +38,7 @@ impl EventSender for JsonSender {
     async fn send(&self, event: PollEvent) -> Result<(), String> {
         let envelope = Envelope {
             session_id: self.session_id.clone(),
-            timestamp: chrono::Utc::now().to_rfc3339(),
+            timestamp: get_timestamp_fmt(),
             event,
         };
 

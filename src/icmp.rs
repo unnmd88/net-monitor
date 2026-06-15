@@ -1,8 +1,5 @@
 use async_trait::async_trait;
 use chrono::Local;
-use ftr::{
-    Ftr, ProbeProtocol, TracerouteConfig, TracerouteConfigBuilder, traceroute,
-};
 use ping_async::{IcmpEchoRequestor, IcmpEchoStatus};
 use std::cell::RefCell;
 use std::fmt::format;
@@ -15,17 +12,17 @@ use tracing::error;
 use trippy_core::{Builder, ProbeStatus, Protocol};
 
 use crate::constants::{DATE_FMT, TIME_FMT};
-use crate::models::{LogEvent, TestType};
+use crate::models::{LogEvent, PollType};
 use crate::traits::Pollable;
 
-pub struct TracertPoller {
+pub struct TracertProvider {
     target: IpAddr,
     max_hops: u8,
     probe_timeout_seconds: u64,
     queries_per_hop: u8,
 }
 
-impl TracertPoller {
+impl TracertProvider {
     pub fn new(
         target: IpAddr,
         max_hops: u8,
@@ -98,17 +95,17 @@ impl TracertPoller {
     }
 }
 
-pub struct IcmpPoller {
+pub struct IcmpProvider {
     target: IpAddr,
     requestor: IcmpEchoRequestor,
-    tracert: Option<TracertPoller>,
+    tracert: Option<TracertProvider>,
 }
 
-impl IcmpPoller {
+impl IcmpProvider {
     pub fn new(
         target: IpAddr,
         timeout_seconds: u64,
-        tracert: Option<TracertPoller>,
+        tracert: Option<TracertProvider>,
     ) -> Result<Self, String> {
         let requestor = IcmpEchoRequestor::new(
             target,
@@ -127,7 +124,7 @@ impl IcmpPoller {
 
     pub async fn ping(&self) -> LogEvent {
         let target = self.target.to_string();
-        let test_type = TestType::Ping;
+        let test_type = PollType::Ping;
 
         let now = Local::now();
         let started_at = now.format(TIME_FMT).to_string();
@@ -204,8 +201,12 @@ impl IcmpPoller {
 }
 
 #[async_trait]
-impl Pollable for IcmpPoller {
+impl Pollable for IcmpProvider {
     async fn fetch(&self) -> LogEvent {
         self.ping().await
+    }
+
+    fn get_provider_name(&self) -> String {
+        "IcmpProvider".to_string()
     }
 }

@@ -9,11 +9,11 @@ use tokio::time::{self, Instant};
 use tracing::error;
 
 use crate::constants::{DATE_FMT, TIME_FMT};
-use crate::models::{LogEvent, TestType};
+use crate::models::{LogEvent, PollType};
 use crate::traits::Pollable;
 use crate::utils::{get_fmt_current_time, validate_oids};
 
-pub struct SnmpPoller {
+pub struct SnmpProvider {
     target: IpAddr,
     port: u16,
     client: Client,
@@ -27,7 +27,7 @@ pub struct SnmpPoller {
     // retries: u32,
 }
 
-impl SnmpPoller {
+impl SnmpProvider {
     pub async fn new(
         target: IpAddr,
         port: u16,
@@ -95,7 +95,7 @@ impl SnmpPoller {
             target: self.target.to_string(),
             start: req_start,
             end: req_end,
-            test_type: TestType::Snmp,
+            test_type: PollType::Snmp,
             success,
             latency_ms,
             details: Some(details),
@@ -104,9 +104,13 @@ impl SnmpPoller {
 }
 
 #[async_trait]
-impl Pollable for SnmpPoller {
+impl Pollable for SnmpProvider {
     async fn fetch(&self) -> LogEvent {
         self.get_many().await
+    }
+
+    fn get_provider_name(&self) -> String {
+        "SnmpProvider".to_string()
     }
 }
 

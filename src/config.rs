@@ -3,6 +3,8 @@ use std::net::IpAddr;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+use crate::models::{PollType, Strategy};
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     //pub output: OutputConfig,
@@ -14,14 +16,6 @@ pub struct Config {
     pub independent: IndependentStrategyConfig,
     pub synchronized: SynchronizedStrategyConfig,
     pub strategy: Strategy,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-pub enum Strategy {
-    #[serde(rename = "independent")]
-    Independent,
-    #[serde(rename = "synchronized")]
-    Synchronized,
 }
 
 // ============================================
@@ -107,16 +101,5 @@ pub struct IndependentSnmpConfig {
 #[derive(Debug, Deserialize)]
 pub struct SynchronizedStrategyConfig {
     pub interval_seconds: u64,
-    pub sequence: Vec<String>, // например, ["ping", "snmp"]
-}
-
-// ==================== Типы событий ====================
-
-#[derive(Debug, Clone)]
-pub enum TestType {
-    Ping,
-    Snmp,
-    Trace,
-    Heartbeat,
-    Error,
+    pub jobs: Vec<PollType>,
 }

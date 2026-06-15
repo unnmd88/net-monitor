@@ -1,8 +1,6 @@
 strategy = "parallel"
 
-[output]
-csv_path = "C:/Users/Андрей/Desktop/net-trace/monitor.csv"
-txt_path = "C:/Users/Андрей/Desktop/net-trace/monitor.txt"
+log = "monitor.json"
 
 [network]
 target = "8.8.8.8"
