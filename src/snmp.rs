@@ -2,29 +2,18 @@ use async_snmp::{Auth, Client, Oid, Retry};
 use async_trait::async_trait;
 use chrono::Local;
 use std::net::IpAddr;
-use std::sync::mpsc::Sender;
 use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio::time::{self, Instant};
-use tracing::error;
+use tokio::time::Instant;
 
-use crate::constants::{DATE_FMT, TIME_FMT};
+use crate::constants::TIME_FMT;
 use crate::models::{LogEvent, PollType};
 use crate::traits::Pollable;
-use crate::utils::{get_fmt_current_time, validate_oids};
 
 pub struct SnmpProvider {
     target: IpAddr,
     port: u16,
     client: Client,
     oids: Vec<Oid>,
-    // target: IpAddr,
-    // port: u16,
-    // community: String,
-    // oids: Vec<String>,
-    // interval_secs: u64,
-    // timeout_secs: u64,
-    // retries: u32,
 }
 
 impl SnmpProvider {
@@ -33,7 +22,6 @@ impl SnmpProvider {
         port: u16,
         community: String,
         oids: Vec<String>,
-        interval_seconds: u64,
         timeout_seconds: u64,
         retries: u32,
     ) -> Result<Self, String> {

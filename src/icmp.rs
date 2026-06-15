@@ -1,17 +1,12 @@
 use async_trait::async_trait;
 use chrono::Local;
 use ping_async::{IcmpEchoRequestor, IcmpEchoStatus};
-use std::cell::RefCell;
-use std::fmt::format;
 use std::net::IpAddr;
 use std::time::Duration;
-use tokio::process::Command;
-use tokio::sync::mpsc;
-use tokio::time::{self, Instant};
-use tracing::error;
-use trippy_core::{Builder, ProbeStatus, Protocol};
+use tokio::time::Instant;
+use trippy_core::{Builder, Protocol};
 
-use crate::constants::{DATE_FMT, TIME_FMT};
+use crate::constants::TIME_FMT;
 use crate::models::{LogEvent, PollType};
 use crate::traits::Pollable;
 

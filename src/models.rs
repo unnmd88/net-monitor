@@ -1,4 +1,4 @@
-use std::{fmt, task::Poll};
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
@@ -34,18 +34,6 @@ impl fmt::Display for PollType {
             PollType::Snmp => write!(f, "SNMP"),
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct TestEventOld {
-    pub date: String,
-    pub target: String,
-    pub start: String,
-    pub end: String,
-    pub test_type: PollType,
-    pub success: bool,
-    pub latency_ms: f64,
-    pub details: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

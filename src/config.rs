@@ -1,7 +1,6 @@
 use std::net::IpAddr;
 
-use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use serde::Deserialize;
 
 use crate::models::{PollType, Strategy};
 

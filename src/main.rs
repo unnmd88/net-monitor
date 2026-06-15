@@ -11,17 +11,14 @@ mod snmp;
 mod traits;
 mod utils;
 
-use std::{task::Poll, time::Duration};
-use tokio::sync::mpsc::{self, Receiver};
-use tracing::{debug, error, info};
-use tracing_appender;
-use tracing_subscriber;
-use uuid::Uuid;
+use std::time::Duration;
+use tokio::sync::mpsc::{self};
+use tracing::{error, info};
 
 use crate::{
     config::Config,
     icmp::{IcmpProvider, TracertProvider},
-    models::{LogEvent, PollEvent, PollType, Strategy},
+    models::{PollEvent, PollType, Strategy},
     poller::{IndependentPoller, SynchronizedPoller},
     sender::{EventSender, JsonSender},
     snmp::SnmpProvider,
@@ -141,7 +138,6 @@ async fn init_snmp_provider(config: &Config) -> Result<SnmpProvider, String> {
         config.snmp.port,
         config.snmp.community.clone(),
         config.snmp.oids.clone(),
-        config.independent.snmp.interval_seconds,
         config.snmp.timeout_seconds,
         config.snmp.retries,
     )
@@ -270,7 +266,7 @@ async fn app() -> Result<(), String> {
                 tx.clone(),
             );
             spawned_tasks.push(tokio::spawn(poller.run()));
-        } // TODO: реализация
+        }
     }
 
     if spawned_tasks.is_empty() {

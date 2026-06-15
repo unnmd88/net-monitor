@@ -1,27 +1,12 @@
-use chrono::{FixedOffset, Local, SecondsFormat, TimeZone, Utc};
+use chrono::{FixedOffset, Local, SecondsFormat, Utc};
 use uuid::Uuid;
 
-const TIME_FMT: &str = "%Y-%m-%d %H:%M:%S%.3f";
+use crate::constants::TIME_FMT;
 
 pub fn get_fmt_current_time() -> String {
     Local::now()
         .format(TIME_FMT)
         .to_string()
-}
-
-pub fn validate_oids(oids: &[String]) -> Result<(), String> {
-    if oids.is_empty() {
-        return Err("SNMP OID list is empty".to_string());
-    }
-    for (pos, oid) in oids.iter().enumerate() {
-        if oid
-            .split('.')
-            .any(|p| p.parse::<u32>().is_err())
-        {
-            return Err(format!("Invalid OID: '{}' at position {}", oid, pos));
-        }
-    }
-    Ok(())
 }
 
 pub fn get_session_id() -> String {

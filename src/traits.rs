@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use std::any::type_name_of_val;
 
 use crate::models::LogEvent;
 

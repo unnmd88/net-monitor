@@ -1,12 +1,10 @@
-use crate::models::{PollEvent, PollType, Strategy};
-use crate::{models::LogEvent, traits::Pollable};
+use crate::models::{PollEvent, Strategy};
+use crate::traits::Pollable;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
-use std::sync::mpsc::Sender;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time as tokio_time;
-use tracing::instrument;
 use tracing::{error, info};
 
 pub struct IndependentPoller<T: Pollable> {
@@ -82,7 +80,7 @@ impl SynchronizedPoller {
             "SynchronizedPoller started with interval={}s. Count tasks={:?} Strategy={:?}",
             self.interval.as_secs(),
             self.tasks.len(),
-            Strategy::Independent,
+            Strategy::Synchronized,
         );
 
         loop {

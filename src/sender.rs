@@ -1,12 +1,11 @@
 use std::path::PathBuf;
 
 use crate::{
-    models::{Envelope, PollEvent, PollType},
+    models::{Envelope, PollEvent},
     utils::get_timestamp_fmt,
 };
-use async_fd_lock::LockWrite;
 use async_trait::async_trait;
-use tokio::{fs::OpenOptions, io::AsyncWriteExt};
+use tokio::fs::OpenOptions;
 
 #[async_trait]
 pub trait EventSender {
