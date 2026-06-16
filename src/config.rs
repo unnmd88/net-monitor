@@ -44,7 +44,7 @@ pub struct NetworkConfig {
 pub struct PingConfig {
     pub timeout_seconds: u64,
     pub fallback_tracert: bool,
-    pub fallback_tracert_delay_seconds: u64,
+    //pub fallback_tracert_delay_seconds: u64,
 }
 
 // ============================================
@@ -54,7 +54,7 @@ pub struct PingConfig {
 #[derive(Debug, Deserialize)]
 pub struct TracertConfig {
     pub max_hops: u8,
-    pub probe_timeout_seconds: u64,
+    //pub probe_timeout_seconds: u64,
     pub queries_per_hop: u8,
 }
 

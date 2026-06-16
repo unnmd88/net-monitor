@@ -1,19 +1,21 @@
 use async_snmp::{Auth, Client, Oid, Retry};
 use async_trait::async_trait;
 use chrono::Local;
+use serde_json::json;
 use std::net::IpAddr;
 use std::time::Duration;
 use tokio::time::Instant;
 
 use crate::constants::TIME_FMT;
-use crate::models::{LogEvent, PollType};
+use crate::models::{LogEvent, PollType, ProviderData};
 use crate::traits::Pollable;
 
 pub struct SnmpProvider {
-    target: IpAddr,
-    port: u16,
+    pub target: IpAddr,
+    pub port: u16,
     client: Client,
     oids: Vec<Oid>,
+    pub timeout_seconds: u64,
 }
 
 impl SnmpProvider {
@@ -50,6 +52,7 @@ impl SnmpProvider {
             port,
             client,
             oids,
+            timeout_seconds,
         })
     }
 
@@ -89,6 +92,33 @@ impl SnmpProvider {
             details: Some(details),
         }
     }
+
+    fn get_oids(&self) -> Vec<String> {
+        self.oids
+            .iter()
+            .map(|o| o.to_string())
+            .collect()
+    }
+
+    fn get_extra(&self) -> Option<serde_json::Value> {
+        Some(json!({
+            "port": self.port,
+            "oids": self.get_oids(),
+        }))
+    }
+
+    pub fn dump(&self) -> ProviderData {
+        ProviderData {
+            name: PollType::Snmp,
+            target: self.target,
+            timeout_seconds: self.timeout_seconds,
+            extra: self.get_extra(),
+        }
+    }
+
+    pub fn get_name(&self) -> String {
+        "SnmpProvider".to_string()
+    }
 }
 
 #[async_trait]
@@ -98,7 +128,7 @@ impl Pollable for SnmpProvider {
     }
 
     fn get_provider_name(&self) -> String {
-        "SnmpProvider".to_string()
+        self.get_name()
     }
 }
 

@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, net::IpAddr};
 
 use serde::{Deserialize, Serialize};
 
@@ -59,10 +59,13 @@ pub enum LogEvent {
     },
 
     Config {
-        poll_interval_secs: u64,
-        targets: Vec<String>,
-        test_types: Vec<PollType>,
-        version: String,
+        timestamp: String,
+        #[serde(rename = "sid")]
+        session_id: String,
+        target: IpAddr,
+        strategy: Strategy,
+        #[serde(flatten)]
+        details: ConfigStrategyDetails,
     },
 
     Status {
@@ -74,6 +77,31 @@ pub enum LogEvent {
         error_type: String,
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ConfigStrategyDetails {
+    Independent {
+        providers: Vec<IndependentProviderConfig>,
+    },
+    Synchronized {
+        interval_seconds: u64,
+        providers: Vec<SynchronizedProviderConfig>,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IndependentProviderConfig {
+    #[serde(flatten)]
+    pub provider: ProviderData,
+    pub interval_seconds: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SynchronizedProviderConfig {
+    #[serde(flatten)]
+    pub provider: ProviderData,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,4 +118,12 @@ pub struct PollEvent {
     #[serde(flatten)]
     pub log_event: LogEvent,
     pub strategy: Strategy,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProviderData {
+    pub name: PollType,
+    pub target: IpAddr,
+    pub timeout_seconds: u64,
+    pub extra: Option<serde_json::Value>,
 }

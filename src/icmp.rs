@@ -1,19 +1,23 @@
 use async_trait::async_trait;
 use chrono::Local;
 use ping_async::{IcmpEchoRequestor, IcmpEchoStatus};
+use serde::Serialize;
+use serde_json;
+use serde_json::json;
 use std::net::IpAddr;
 use std::time::Duration;
 use tokio::time::Instant;
 use trippy_core::{Builder, Protocol};
 
 use crate::constants::TIME_FMT;
-use crate::models::{LogEvent, PollType};
+use crate::models::{LogEvent, PollType, ProviderData};
 use crate::traits::Pollable;
 
+#[derive(Debug, Serialize)]
 pub struct TracertProvider {
     target: IpAddr,
     max_hops: u8,
-    probe_timeout_seconds: u64,
+    // probe_timeout_seconds: u64,
     queries_per_hop: u8,
 }
 
@@ -21,13 +25,13 @@ impl TracertProvider {
     pub fn new(
         target: IpAddr,
         max_hops: u8,
-        probe_timeout_seconds: u64,
+        // probe_timeout_seconds: u64,
         queries_per_hop: u8,
     ) -> Result<Self, String> {
         Ok(Self {
             target,
             max_hops,
-            probe_timeout_seconds,
+            // probe_timeout_seconds,
             queries_per_hop,
         })
     }
@@ -91,9 +95,10 @@ impl TracertProvider {
 }
 
 pub struct IcmpProvider {
-    target: IpAddr,
+    pub target: IpAddr,
     requestor: IcmpEchoRequestor,
     tracert: Option<TracertProvider>,
+    pub timeout_seconds: u64,
 }
 
 impl IcmpProvider {
@@ -114,6 +119,7 @@ impl IcmpProvider {
             target,
             requestor,
             tracert,
+            timeout_seconds,
         })
     }
 
@@ -193,6 +199,27 @@ impl IcmpProvider {
             details: Some(details),
         }
     }
+
+    fn get_extra(&self) -> Option<serde_json::Value> {
+        self.tracert.as_ref().and_then(|t| {
+            serde_json::to_value(t)
+                .ok()
+                .map(|v| json!({"tracert": v}))
+        })
+    }
+
+    pub fn dump(&self) -> ProviderData {
+        ProviderData {
+            name: PollType::Ping,
+            target: self.target,
+            timeout_seconds: self.timeout_seconds,
+            extra: self.get_extra(),
+        }
+    }
+
+    pub fn get_name(&self) -> String {
+        "IcmpProvider".to_string()
+    }
 }
 
 #[async_trait]
@@ -202,6 +229,6 @@ impl Pollable for IcmpProvider {
     }
 
     fn get_provider_name(&self) -> String {
-        "IcmpProvider".to_string()
+        self.get_name()
     }
 }

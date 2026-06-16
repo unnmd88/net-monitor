@@ -1,5 +1,5 @@
 mod config;
-use tracing::instrument;
+use serde_json::json;
 mod constants;
 mod event_loop;
 mod icmp;
@@ -18,12 +18,15 @@ use tracing::{error, info};
 use crate::{
     config::Config,
     icmp::{IcmpProvider, TracertProvider},
-    models::{PollEvent, PollType, Strategy},
+    models::{
+        ConfigStrategyDetails, IndependentProviderConfig, LogEvent, PollEvent,
+        PollType, Strategy, SynchronizedProviderConfig,
+    },
     poller::{IndependentPoller, SynchronizedPoller},
     sender::{EventSender, JsonSender},
     snmp::SnmpProvider,
     traits::Pollable,
-    utils::get_session_id,
+    utils::{get_session_id, get_timestamp_fmt},
 };
 
 type Senders = Vec<Box<dyn EventSender + Send>>;
@@ -80,13 +83,11 @@ fn user_friendly_error(e: &toml::de::Error) -> String {
     msg.to_string()
 }
 
-#[instrument(skip_all)]
 fn init_tracert(config: &Config) -> Result<Option<TracertProvider>, String> {
     let tracert = if config.ping.fallback_tracert {
         match TracertProvider::new(
-            config.network.target.clone(),
+            config.network.target,
             config.tracert.max_hops,
-            config.tracert.probe_timeout_seconds,
             config.tracert.queries_per_hop,
         ) {
             Ok(t) => Some(t),
@@ -134,7 +135,7 @@ fn spawn_icmp_independent_poll(
 
 async fn init_snmp_provider(config: &Config) -> Result<SnmpProvider, String> {
     let snmp_provider = match SnmpProvider::new(
-        config.network.target.clone(),
+        config.network.target,
         config.snmp.port,
         config.snmp.community.clone(),
         config.snmp.oids.clone(),
@@ -186,16 +187,17 @@ async fn app() -> Result<(), String> {
     // Конфиг опроса
     let config = load_config(CONFIG_NAME)?;
 
-    let json_sender = match JsonSender::new(&config.log, session_id).await {
-        Ok(sender) => {
-            info!("JsonSender create successfully.");
-            sender
-        }
-        Err(e) => {
-            error!("Failed to create JsonSender: {e}");
-            return Err(CONFIG_ERROR_MSG.to_string());
-        }
-    };
+    let json_sender =
+        match JsonSender::new(&config.log, session_id.clone()).await {
+            Ok(sender) => {
+                info!("JsonSender create successfully.");
+                sender
+            }
+            Err(e) => {
+                error!("Failed to create JsonSender: {e}");
+                return Err(CONFIG_ERROR_MSG.to_string());
+            }
+        };
 
     let senders: Senders = vec![Box::new(json_sender)];
 
@@ -212,40 +214,87 @@ async fn app() -> Result<(), String> {
 
     match current_strategy {
         Strategy::Independent => {
-            if config.independent.ping.enabled {
-                let icmp_provider = init_icmp_provider(&config)
-                    .map_err(|_| ERROR_INIT_ICMP.to_string())?;
+            let mut providers = Vec::new();
+
+            let icmp_provider = match config.independent.ping.enabled {
+                true => {
+                    let icmp = init_icmp_provider(&config)?;
+                    providers.push(IndependentProviderConfig {
+                        provider: icmp.dump(),
+                        interval_seconds: config
+                            .independent
+                            .ping
+                            .interval_seconds,
+                    });
+                    Some(icmp)
+                }
+                false => None,
+            };
+            let snmp_provider = match config.independent.snmp.enabled {
+                true => {
+                    let provider = init_snmp_provider(&config).await?;
+                    providers.push(IndependentProviderConfig {
+                        provider: provider.dump(),
+                        interval_seconds: config
+                            .independent
+                            .snmp
+                            .interval_seconds,
+                    });
+                    Some(provider)
+                }
+                false => None,
+            };
+
+            let config_event = LogEvent::Config {
+                timestamp: get_timestamp_fmt(),
+                session_id: session_id.clone(),
+                target: config.network.target,
+                strategy: Strategy::Independent,
+                details: ConfigStrategyDetails::Independent { providers },
+            };
+            tx.send(PollEvent {
+                step: 0,
+                log_event: config_event,
+                strategy: Strategy::Independent,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+            if let Some(p) = icmp_provider {
                 spawned_tasks.push(spawn_icmp_independent_poll(
-                    icmp_provider,
+                    p,
                     config.independent.ping.interval_seconds,
                     tx.clone(),
                 ));
-                println!("Запускаю опрос по {}", PollType::Ping);
-                tokio::time::sleep(Duration::from_millis(200)).await;
             }
-
-            if config.independent.snmp.enabled {
-                let snmp_provider = init_snmp_provider(&config)
-                    .await
-                    .map_err(|_| ERROR_INIT_SNMP.to_string())?;
-
+            if let Some(p) = snmp_provider {
                 spawned_tasks.push(spawn_snmp_independent_poll(
-                    snmp_provider,
+                    p,
                     config.independent.snmp.interval_seconds,
                     tx.clone(),
                 ));
-                println!("Запускаю опрос по {}", PollType::Snmp);
-                tokio::time::sleep(Duration::from_millis(200)).await;
             }
         }
+
         Strategy::Synchronized => {
             let mut tasks: Vec<Box<dyn Pollable>> = Vec::new();
+            let mut providers = Vec::new();
 
+            // --------//
             for task in &config.synchronized.jobs {
                 let provider: Box<dyn Pollable> = match task {
                     PollType::Ping => {
                         let icmp_provider = init_icmp_provider(&config)
                             .map_err(|_| ERROR_INIT_ICMP.to_string())?;
+
+                        providers.push(SynchronizedProviderConfig {
+                            provider: icmp_provider.dump(),
+                        });
+                        info!(
+                            "Added {} provider for {} strategy.",
+                            icmp_provider.get_provider_name(),
+                            &current_strategy
+                        );
                         Box::new(icmp_provider)
                     }
                     PollType::Snmp => {
@@ -253,13 +302,33 @@ async fn app() -> Result<(), String> {
                             init_snmp_provider(&config)
                                 .await
                                 .map_err(|_| ERROR_INIT_SNMP.to_string())?;
+                        providers.push(SynchronizedProviderConfig {
+                            provider: snmp_provider.dump(),
+                        });
                         Box::new(snmp_provider)
                     }
                 };
-                let provider_name = provider.get_provider_name();
                 tasks.push(provider);
-                info!("Added {provider_name} provider.");
             }
+
+            let config_event = LogEvent::Config {
+                timestamp: get_timestamp_fmt(),
+                session_id: session_id.clone(),
+                target: config.network.target,
+                strategy: Strategy::Synchronized,
+                details: ConfigStrategyDetails::Synchronized {
+                    interval_seconds: config.synchronized.interval_seconds,
+                    providers,
+                },
+            };
+            tx.send(PollEvent {
+                step: 0,
+                log_event: config_event,
+                strategy: Strategy::Synchronized,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
             let poller = SynchronizedPoller::new(
                 tasks,
                 config.synchronized.interval_seconds,
