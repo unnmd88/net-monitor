@@ -42,7 +42,7 @@ pub struct NetworkConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct PingConfig {
-    pub timeout_seconds: u64,
+    pub timeout_ms: u64,
     pub fallback_tracert: bool,
     //pub fallback_tracert_delay_seconds: u64,
 }
@@ -72,7 +72,7 @@ pub struct SnmpConfig {
 }
 
 // ============================================
-// ПАРАЛЛЕЛЬНАЯ СТРАТЕГИЯ
+// Independent СТРАТЕГИЯ
 // ============================================
 
 #[derive(Debug, Deserialize)]
@@ -84,17 +84,19 @@ pub struct IndependentStrategyConfig {
 #[derive(Debug, Deserialize)]
 pub struct IndependentPingConfig {
     pub enabled: bool,
-    pub interval_seconds: u64,
+    pub interval_ms: u64,
+    pub retries: u8,
+    pub retries_delay_ms: u64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct IndependentSnmpConfig {
     pub enabled: bool,
-    pub interval_seconds: u64,
+    pub interval_ms: u64,
 }
 
 // ============================================
-// ПОСЛЕДОВАТЕЛЬНАЯ СТРАТЕГИЯ
+// Synhronized СТРАТЕГИЯ
 // ============================================
 
 #[derive(Debug, Deserialize)]

@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use crate::constants::TIME_FMT;
-use crate::models::{LogEvent, PollType, ProviderData};
+use crate::models::{Event, PollType, ProviderConfig};
 use crate::traits::Pollable;
 
 pub struct SnmpProvider {
@@ -56,7 +56,7 @@ impl SnmpProvider {
         })
     }
 
-    pub async fn get_many(&self) -> LogEvent {
+    pub async fn get_many(&self) -> Event {
         let now = Local::now();
         let start = Instant::now();
 
@@ -82,7 +82,7 @@ impl SnmpProvider {
             Err(e) => (false, format!("SNMP error: {}", e)),
         };
 
-        LogEvent::PollResult {
+        Event::PollResult {
             target: self.target.to_string(),
             start: req_start,
             end: req_end,
@@ -107,11 +107,11 @@ impl SnmpProvider {
         }))
     }
 
-    pub fn dump(&self) -> ProviderData {
-        ProviderData {
+    pub fn dump(&self) -> ProviderConfig {
+        ProviderConfig {
             name: PollType::Snmp,
             target: self.target,
-            timeout_seconds: self.timeout_seconds,
+            timeout_ms: self.timeout_seconds,
             extra: self.get_extra(),
         }
     }
@@ -123,7 +123,7 @@ impl SnmpProvider {
 
 #[async_trait]
 impl Pollable for SnmpProvider {
-    async fn fetch(&self) -> LogEvent {
+    async fn fetch(&self) -> Event {
         self.get_many().await
     }
 

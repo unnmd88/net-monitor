@@ -1,12 +1,12 @@
 use tokio::sync::mpsc;
 use tracing::instrument;
 
-use crate::models::PollEvent;
+use crate::models::Event;
 use crate::sender::EventSender;
 
 #[instrument(skip_all)]
 pub async fn handle_events(
-    mut rx: mpsc::Receiver<PollEvent>,
+    mut rx: mpsc::Receiver<Event>,
     mut senders: Vec<Box<dyn EventSender + Send>>,
 ) {
     while let Some(event) = rx.recv().await {

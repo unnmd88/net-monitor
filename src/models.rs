@@ -42,35 +42,35 @@ pub struct Envelope {
     pub session_id: String,
     pub timestamp: String,
     #[serde(flatten)]
-    pub event: PollEvent,
+    pub event: Event,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchResult {
+    pub test_type: PollType,
+    pub target: IpAddr,
+    pub start: String,
+    pub end: String,
+    pub success: bool,
+    pub attempts: u8,
+    pub latency_ms: f64,
+    pub details: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum LogEvent {
+pub enum Event {
     PollResult {
-        target: String,
-        start: String,
-        end: String,
-        test_type: PollType,
-        success: bool,
-        latency_ms: f64,
-        details: Option<String>,
+        strategy: Strategy,
+        step: usize,
+        #[serde(flatten)]
+        payload: FetchResult,
     },
 
     Config {
-        timestamp: String,
-        #[serde(rename = "sid")]
-        session_id: String,
-        target: IpAddr,
         strategy: Strategy,
         #[serde(flatten)]
         details: ConfigStrategyDetails,
-    },
-
-    Status {
-        state: State, // Started, Stopped, Paused
-        message: Option<String>,
     },
 
     Error {
@@ -83,47 +83,27 @@ pub enum LogEvent {
 #[serde(untagged)]
 pub enum ConfigStrategyDetails {
     Independent {
-        providers: Vec<IndependentProviderConfig>,
+        pollers: Vec<IndependentPollerConfig>,
     },
     Synchronized {
         interval_seconds: u64,
-        providers: Vec<SynchronizedProviderConfig>,
+        providers: Vec<ProviderConfig>,
     },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct IndependentProviderConfig {
+pub struct IndependentPollerConfig {
     #[serde(flatten)]
-    pub provider: ProviderData,
-    pub interval_seconds: u64,
+    pub provider: ProviderConfig,
+    pub retries: u8,
+    pub retries_interval_ms: u64,
+    pub interval_ms: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SynchronizedProviderConfig {
-    #[serde(flatten)]
-    pub provider: ProviderData,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum State {
-    Started,
-    Stopped,
-    Paused,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PollEvent {
-    pub step: usize,
-    #[serde(flatten)]
-    pub log_event: LogEvent,
-    pub strategy: Strategy,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ProviderData {
+pub struct ProviderConfig {
     pub name: PollType,
     pub target: IpAddr,
-    pub timeout_seconds: u64,
+    pub timeout_ms: u64,
     pub extra: Option<serde_json::Value>,
 }

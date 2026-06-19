@@ -7,7 +7,7 @@ mod logging;
 mod models;
 mod poller;
 mod sender;
-mod snmp;
+// mod snmp;
 mod traits;
 mod utils;
 
@@ -19,12 +19,17 @@ use crate::{
     config::Config,
     icmp::{IcmpProvider, TracertProvider},
     models::{
-        ConfigStrategyDetails, IndependentProviderConfig, LogEvent, PollEvent,
-        PollType, Strategy, SynchronizedProviderConfig,
+        ConfigStrategyDetails,
+        Event,
+        IndependentPollerConfig,
+        PollType,
+        Strategy, //SynchronizedProviderConfig,
     },
-    poller::{IndependentPoller, SynchronizedPoller},
+    poller::{
+        IndependentPoller, IndependentPollerConfiguration, SynchronizedPoller,
+    },
     sender::{EventSender, JsonSender},
-    snmp::SnmpProvider,
+    //snmp::SnmpProvider,
     traits::Pollable,
     utils::{get_session_id, get_timestamp_fmt},
 };
@@ -106,8 +111,8 @@ fn init_icmp_provider(config: &Config) -> Result<IcmpProvider, String> {
     let tracert = init_tracert(&config)?;
 
     let icmp_provider = match IcmpProvider::new(
-        config.network.target.clone(),
-        config.ping.timeout_seconds,
+        config.network.target,
+        config.ping.timeout_ms,
         tracert,
     ) {
         Ok(provider) => provider,
@@ -122,17 +127,7 @@ fn init_icmp_provider(config: &Config) -> Result<IcmpProvider, String> {
     Ok(icmp_provider)
 }
 
-fn spawn_icmp_independent_poll(
-    icmp_provider: IcmpProvider,
-    interval_seconds: u64,
-    tx: mpsc::Sender<PollEvent>,
-) -> tokio::task::JoinHandle<()> {
-    let icmp_poller =
-        IndependentPoller::new(icmp_provider, interval_seconds, tx);
-
-    tokio::spawn(icmp_poller.run())
-}
-
+/*
 async fn init_snmp_provider(config: &Config) -> Result<SnmpProvider, String> {
     let snmp_provider = match SnmpProvider::new(
         config.network.target,
@@ -154,7 +149,29 @@ async fn init_snmp_provider(config: &Config) -> Result<SnmpProvider, String> {
     info!("{SNMP_PROVIDER} {INIT_SUCCESSFULLY}.");
     Ok(snmp_provider)
 }
+*/
 
+fn create_independent_ping_poller<T: Pollable>(
+    provider: T,
+    config: &Config,
+    tx: mpsc::Sender<Event>,
+) -> IndependentPoller<T> {
+    let poller_config = IndependentPollerConfiguration {
+        interval_ms: config.independent.ping.interval_ms,
+        retries: config.independent.ping.retries,
+        retries_delay_ms: config.independent.ping.retries_delay_ms,
+        tx,
+    };
+    IndependentPoller::new(provider, poller_config)
+}
+
+fn spawn_independent_poll<T: Pollable + 'static>(
+    poller: IndependentPoller<T>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(poller.run())
+}
+
+/*
 fn spawn_snmp_independent_poll(
     snmp_provider: SnmpProvider,
     interval_seconds: u64,
@@ -164,6 +181,7 @@ fn spawn_snmp_independent_poll(
         IndependentPoller::new(snmp_provider, interval_seconds, tx);
     tokio::spawn(snmp_provider.run())
 }
+*/
 
 #[tokio::main]
 async fn main() {
@@ -203,7 +221,7 @@ async fn app() -> Result<(), String> {
 
     // Канал, которые принимает структуры PollEvent и отправляет их различным senders.
     // tx -> передатчик структур PollEvent в канал, rx -> приёмник структур PollEvent.
-    let (tx, rx) = mpsc::channel::<PollEvent>(256);
+    let (tx, rx) = mpsc::channel::<Event>(256);
     tokio::spawn(event_loop::handle_events(rx, senders));
 
     let mut spawned_tasks = Vec::new();
@@ -214,127 +232,104 @@ async fn app() -> Result<(), String> {
 
     match current_strategy {
         Strategy::Independent => {
-            let mut providers = Vec::new();
+            let mut pollers = Vec::new();
 
-            let icmp_provider = match config.independent.ping.enabled {
-                true => {
-                    let icmp = init_icmp_provider(&config)?;
-                    providers.push(IndependentProviderConfig {
-                        provider: icmp.dump(),
-                        interval_seconds: config
-                            .independent
-                            .ping
-                            .interval_seconds,
-                    });
-                    Some(icmp)
-                }
-                false => None,
-            };
-            let snmp_provider = match config.independent.snmp.enabled {
-                true => {
-                    let provider = init_snmp_provider(&config).await?;
-                    providers.push(IndependentProviderConfig {
-                        provider: provider.dump(),
-                        interval_seconds: config
-                            .independent
-                            .snmp
-                            .interval_seconds,
-                    });
-                    Some(provider)
-                }
-                false => None,
-            };
-
-            let config_event = LogEvent::Config {
-                timestamp: get_timestamp_fmt(),
-                session_id: session_id.clone(),
-                target: config.network.target,
-                strategy: Strategy::Independent,
-                details: ConfigStrategyDetails::Independent { providers },
-            };
-            tx.send(PollEvent {
-                step: 0,
-                log_event: config_event,
-                strategy: Strategy::Independent,
-            })
-            .await
-            .map_err(|e| e.to_string())?;
-
-            if let Some(p) = icmp_provider {
-                spawned_tasks.push(spawn_icmp_independent_poll(
-                    p,
-                    config.independent.ping.interval_seconds,
+            if config.independent.ping.enabled {
+                let icmp_provider = init_icmp_provider(&config)?;
+                let poller = create_independent_ping_poller(
+                    icmp_provider,
+                    &config,
                     tx.clone(),
-                ));
+                );
+                pollers.push(poller);
             }
-            if let Some(p) = snmp_provider {
-                spawned_tasks.push(spawn_snmp_independent_poll(
-                    p,
-                    config.independent.snmp.interval_seconds,
-                    tx.clone(),
-                ));
+            /*
+                        if config.independent.snmp.enabled {
+                            let snmp_provider = init_snmp_provider(...);
+                            let poller = create
+                        }
+
+            */
+
+            let config_event = Event::Config {
+                strategy: Strategy::Independent,
+                details: ConfigStrategyDetails::Independent {
+                    pollers: pollers
+                        .iter()
+                        .map(|poller| poller.dump())
+                        .collect(),
+                },
+            };
+            tx.send(config_event)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            for p in pollers {
+                spawned_tasks.push(spawn_independent_poll(p));
             }
         }
 
         Strategy::Synchronized => {
-            let mut tasks: Vec<Box<dyn Pollable>> = Vec::new();
-            let mut providers = Vec::new();
+            /*
+                        let mut tasks: Vec<Box<dyn Pollable>> = Vec::new();
+                        let mut providers = Vec::new();
 
-            // --------//
-            for task in &config.synchronized.jobs {
-                let provider: Box<dyn Pollable> = match task {
-                    PollType::Ping => {
-                        let icmp_provider = init_icmp_provider(&config)
-                            .map_err(|_| ERROR_INIT_ICMP.to_string())?;
+                        // --------//
+                        for task in &config.synchronized.jobs {
+                            let provider: Box<dyn Pollable> = match task {
+                                PollType::Ping => {
+                                    let icmp_provider = init_icmp_provider(&config)
+                                        .map_err(|_| ERROR_INIT_ICMP.to_string())?;
 
-                        providers.push(SynchronizedProviderConfig {
-                            provider: icmp_provider.dump(),
-                        });
-                        info!(
-                            "Added {} provider for {} strategy.",
-                            icmp_provider.get_provider_name(),
-                            &current_strategy
+                                    providers.push(SynchronizedProviderConfig {
+                                        provider: icmp_provider.dump(),
+                                    });
+                                    info!(
+                                        "Added {} provider for {} strategy.",
+                                        icmp_provider.get_provider_name(),
+                                        &current_strategy
+                                    );
+                                    Box::new(icmp_provider)
+                                }
+                                PollType::Snmp => {
+                                    let snmp_provider =
+                                        init_snmp_provider(&config)
+                                            .await
+                                            .map_err(|_| ERROR_INIT_SNMP.to_string())?;
+                                    providers.push(SynchronizedProviderConfig {
+                                        provider: snmp_provider.dump(),
+                                    });
+                                    Box::new(snmp_provider)
+                                }
+                            };
+                            tasks.push(provider);
+                        }
+
+                        let config_event = Event::Config {
+                            timestamp: get_timestamp_fmt(),
+                            session_id: session_id.clone(),
+                            target: config.network.target,
+                            strategy: Strategy::Synchronized,
+                            details: ConfigStrategyDetails::Synchronized {
+                                interval_seconds: config.synchronized.interval_seconds,
+                                providers,
+                            },
+                        };
+                        tx.send(Event {
+                            step: 0,
+                            log_event: config_event,
+                            strategy: Strategy::Synchronized,
+                        })
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                        let poller = SynchronizedPoller::new(
+                            tasks,
+                            config.synchronized.interval_seconds,
+                            tx.clone(),
                         );
-                        Box::new(icmp_provider)
-                    }
-                    PollType::Snmp => {
-                        let snmp_provider =
-                            init_snmp_provider(&config)
-                                .await
-                                .map_err(|_| ERROR_INIT_SNMP.to_string())?;
-                        providers.push(SynchronizedProviderConfig {
-                            provider: snmp_provider.dump(),
-                        });
-                        Box::new(snmp_provider)
-                    }
-                };
-                tasks.push(provider);
-            }
-
-            let config_event = LogEvent::Config {
-                timestamp: get_timestamp_fmt(),
-                session_id: session_id.clone(),
-                target: config.network.target,
-                strategy: Strategy::Synchronized,
-                details: ConfigStrategyDetails::Synchronized {
-                    interval_seconds: config.synchronized.interval_seconds,
-                    providers,
-                },
-            };
-            tx.send(PollEvent {
-                step: 0,
-                log_event: config_event,
-                strategy: Strategy::Synchronized,
-            })
-            .await
-            .map_err(|e| e.to_string())?;
-
-            let poller = SynchronizedPoller::new(
-                tasks,
-                config.synchronized.interval_seconds,
-                tx.clone(),
-            );
-            spawned_tasks.push(tokio::spawn(poller.run()));
+                        spawned_tasks.push(tokio::spawn(poller.run()));
+            */
         }
     }
 

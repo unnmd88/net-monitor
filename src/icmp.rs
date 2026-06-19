@@ -1,16 +1,17 @@
 use async_trait::async_trait;
 use chrono::Local;
-use ping_async::{IcmpEchoRequestor, IcmpEchoStatus};
+use ping_async::{IcmpEchoReply, IcmpEchoRequestor, IcmpEchoStatus};
 use serde::Serialize;
 use serde_json;
 use serde_json::json;
 use std::net::IpAddr;
 use std::time::Duration;
 use tokio::time::Instant;
+use tokio::time::sleep;
 use trippy_core::{Builder, Protocol};
 
 use crate::constants::TIME_FMT;
-use crate::models::{LogEvent, PollType, ProviderData};
+use crate::models::{Event, PollType, ProviderConfig};
 use crate::traits::Pollable;
 
 #[derive(Debug, Serialize)]
@@ -98,20 +99,21 @@ pub struct IcmpProvider {
     pub target: IpAddr,
     requestor: IcmpEchoRequestor,
     tracert: Option<TracertProvider>,
-    pub timeout_seconds: u64,
+    pub timeout_ms: u64,
 }
 
 impl IcmpProvider {
     pub fn new(
         target: IpAddr,
-        timeout_seconds: u64,
+        timeout_ms: u64,
         tracert: Option<TracertProvider>,
     ) -> Result<Self, String> {
         let requestor = IcmpEchoRequestor::new(
             target,
             None,
             None,
-            Some(Duration::from_secs(timeout_seconds)),
+            //Some(Duration::from_secs(timeout_seconds)),
+            Some(Duration::from_millis(timeout_ms)),
         )
         .map_err(|e| format!("Ошибка создания ping-опроса: {e}"))?;
 
@@ -119,10 +121,11 @@ impl IcmpProvider {
             target,
             requestor,
             tracert,
-            timeout_seconds,
+            timeout_ms,
         })
     }
 
+    /*
     pub async fn ping(&self) -> LogEvent {
         let target = self.target.to_string();
         let test_type = PollType::Ping;
@@ -199,6 +202,99 @@ impl IcmpProvider {
             details: Some(details),
         }
     }
+    */
+
+    /*
+    pub async fn ping2(&self) -> LogEvent {
+        let target = self.target.to_string();
+        let test_type = PollType::Ping;
+
+        let now = Local::now();
+        let started_at = now.format(TIME_FMT).to_string();
+
+        let mut details: Vec<String> = Vec::with_capacity(self.retries);
+
+        let start_point = Instant::now();
+
+        let mut success = false;
+        let mut attempts = 0u8;
+
+        while attempts < self.retries {
+            attempts += 1;
+
+            let result = match self.ping_once().await {
+                Ok(msg) => {
+                    success = true;
+                    format!("Попытка {attempt}: {msg}")
+                }
+                Err(e) => format!("Попытка {attempt}: {e}"),
+            };
+            details.push(result);
+            if success {
+                break;
+            }
+
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        for attempt in 0..=4 {
+            let result = match self.ping_once().await {
+                Ok(msg) => {
+                    success = true;
+                    format!("Попытка {attempt}: {msg}")
+                }
+                Err(e) => format!("Попытка {attempt}: {e}"),
+            };
+            details.push(result);
+            if success {
+                break;
+            }
+
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        let latency_ms = start_point.elapsed().as_secs_f64() * 1000.0;
+        let finished_at = Local::now()
+            .format(TIME_FMT)
+            .to_string();
+
+        LogEvent::PollResult {
+            target,
+            start: started_at,
+            end: finished_at,
+            test_type,
+            success,
+            latency_ms,
+            details: Some(details.join("; ")),
+        }
+    }
+    */
+
+    async fn ping_once(&self) -> Result<String, String> {
+        // let reply = self.requestor.send().await.map_err(|e| format!("Ошибка: {}", e))?;
+
+        let reply = match self.requestor.send().await {
+            Ok(reply) => reply,
+            Err(e) => return Err(format!("Ошибка: {}", e)),
+        };
+
+        let result = match reply.status() {
+            IcmpEchoStatus::Success => {
+                Ok(format!("Успех. RTT: {:?}", reply.round_trip_time()))
+            }
+            IcmpEchoStatus::TimedOut => Err(format!(
+                "Превышен таймаут ответа.: {:?}",
+                reply.round_trip_time()
+            )),
+            IcmpEchoStatus::Unreachable => Err(format!(
+                "Хост недоступен. RTT: {:?}",
+                reply.round_trip_time()
+            )),
+            IcmpEchoStatus::Unknown => Err(format!("Ошибка запроса(Unknown)")),
+        };
+
+        result
+    }
 
     fn get_extra(&self) -> Option<serde_json::Value> {
         self.tracert.as_ref().and_then(|t| {
@@ -208,11 +304,11 @@ impl IcmpProvider {
         })
     }
 
-    pub fn dump(&self) -> ProviderData {
-        ProviderData {
+    pub fn dump(&self) -> ProviderConfig {
+        ProviderConfig {
             name: PollType::Ping,
             target: self.target,
-            timeout_seconds: self.timeout_seconds,
+            timeout_ms: self.timeout_ms,
             extra: self.get_extra(),
         }
     }
@@ -224,8 +320,22 @@ impl IcmpProvider {
 
 #[async_trait]
 impl Pollable for IcmpProvider {
-    async fn fetch(&self) -> LogEvent {
-        self.ping().await
+    async fn fetch(&self) -> Result<String, String> {
+        //self.ping().await
+        //self.ping2().await
+        self.ping_once().await
+    }
+
+    fn dump(&self) -> ProviderConfig {
+        self.dump()
+    }
+
+    fn target(&self) -> IpAddr {
+        self.target
+    }
+
+    fn whoami(&self) -> PollType {
+        PollType::Ping
     }
 
     fn get_provider_name(&self) -> String {

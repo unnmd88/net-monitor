@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::{
-    models::{Envelope, PollEvent},
+    models::{Envelope, Event},
     utils::get_timestamp_fmt,
 };
 use async_trait::async_trait;
@@ -9,7 +9,7 @@ use tokio::fs::OpenOptions;
 
 #[async_trait]
 pub trait EventSender {
-    async fn send(&self, event: PollEvent) -> Result<(), String>;
+    async fn send(&self, event: Event) -> Result<(), String>;
 }
 
 pub struct JsonSender {
@@ -34,7 +34,7 @@ impl JsonSender {
 
 #[async_trait]
 impl EventSender for JsonSender {
-    async fn send(&self, event: PollEvent) -> Result<(), String> {
+    async fn send(&self, event: Event) -> Result<(), String> {
         let envelope = Envelope {
             session_id: self.session_id.clone(),
             timestamp: get_timestamp_fmt(),
