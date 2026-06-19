@@ -15,7 +15,7 @@ pub struct SnmpProvider {
     pub port: u16,
     client: Client,
     oids: Vec<Oid>,
-    pub timeout_seconds: u64,
+    pub timeout_ms: u64,
 }
 
 impl SnmpProvider {
@@ -24,14 +24,14 @@ impl SnmpProvider {
         port: u16,
         community: String,
         oids: Vec<String>,
-        timeout_seconds: u64,
+        timeout_ms: u64,
         retries: u32,
     ) -> Result<Self, String> {
         let client = match Client::builder(
             (target.to_string(), port),
             Auth::v2c(&community),
         )
-        .timeout(Duration::from_secs(timeout_seconds))
+        .timeout(Duration::from_millis(timeout_ms))
         .retry(Retry::fixed(retries, Duration::ZERO))
         .connect()
         .await
@@ -52,23 +52,12 @@ impl SnmpProvider {
             port,
             client,
             oids,
-            timeout_seconds,
+            timeout_ms,
         })
     }
 
-    pub async fn get_many(&self) -> Event {
-        let now = Local::now();
-        let start = Instant::now();
-
-        let req_start = now.format(TIME_FMT).to_string();
-        let result = self.client.get_many(&self.oids).await;
-        let req_end = Local::now()
-            .format(TIME_FMT)
-            .to_string();
-
-        let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
-
-        let (success, details) = match result {
+    pub async fn get_many(&self) -> Result<String, String> {
+        match self.client.get_many(&self.oids).await {
             Ok(results) => {
                 let values = results
                     .iter()
@@ -77,19 +66,9 @@ impl SnmpProvider {
                     })
                     .collect::<Vec<_>>()
                     .join(" | ");
-                (true, format!("{}", values))
+                Ok(values)
             }
-            Err(e) => (false, format!("SNMP error: {}", e)),
-        };
-
-        Event::PollResult {
-            target: self.target.to_string(),
-            start: req_start,
-            end: req_end,
-            test_type: PollType::Snmp,
-            success,
-            latency_ms,
-            details: Some(details),
+            Err(e) => Err(format!("SNMP error: {}", e)),
         }
     }
 
@@ -109,9 +88,9 @@ impl SnmpProvider {
 
     pub fn dump(&self) -> ProviderConfig {
         ProviderConfig {
-            name: PollType::Snmp,
+            name: self.whoami(),
             target: self.target,
-            timeout_ms: self.timeout_seconds,
+            timeout_ms: self.timeout_ms,
             extra: self.get_extra(),
         }
     }
@@ -123,8 +102,20 @@ impl SnmpProvider {
 
 #[async_trait]
 impl Pollable for SnmpProvider {
-    async fn fetch(&self) -> Event {
+    async fn fetch(&self) -> Result<String, String> {
         self.get_many().await
+    }
+
+    fn dump(&self) -> ProviderConfig {
+        self.dump()
+    }
+
+    fn target(&self) -> IpAddr {
+        self.target
+    }
+
+    fn whoami(&self) -> PollType {
+        PollType::Snmp
     }
 
     fn get_provider_name(&self) -> String {

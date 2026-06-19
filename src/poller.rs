@@ -5,26 +5,24 @@ use crate::traits::Pollable;
 use chrono::Local;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
-use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::time::{self as tokio_time, Instant};
+use tokio::time::{self as tokio_time, Instant, interval};
 use tracing::{error, info};
 
 async fn poll_with_retries(
     provider: &dyn Pollable,
-    retries: u8,
-    retries_delay_ms: u64,
+    config: &PollerConfig,
 ) -> FetchResult {
     let now = Local::now();
     let started_at = now.format(TIME_FMT).to_string();
-    let mut details = Vec::with_capacity(retries as usize);
+    let mut details = Vec::with_capacity(config.retries.into());
     let start_point = Instant::now();
 
     let mut success = false;
     let mut attempts = 0u8;
 
-    for attempt in 1..=retries {
+    for attempt in 1..=config.retries {
         attempts += 1;
 
         let detail = match provider.fetch().await {
@@ -40,8 +38,9 @@ async fn poll_with_retries(
             break;
         }
 
-        if attempt < retries {
-            tokio::time::sleep(Duration::from_millis(retries_delay_ms)).await;
+        if attempt < config.retries {
+            tokio::time::sleep(Duration::from_millis(config.retries_delay_ms))
+                .await;
         }
     }
 
@@ -79,15 +78,15 @@ impl PollerConfig {
     }
 }
 
-pub struct IndependentPoller<T: Pollable> {
-    provider: T,
+pub struct IndependentPoller {
+    provider: Box<dyn Pollable>,
     config: PollerConfig,
     tx: mpsc::Sender<Event>,
 }
 
-impl<T: Pollable> IndependentPoller<T> {
+impl IndependentPoller {
     pub fn new(
-        provider: T,
+        provider: Box<dyn Pollable>,
         config: PollerConfig,
         tx: mpsc::Sender<Event>,
     ) -> Self {
@@ -111,10 +110,7 @@ impl<T: Pollable> IndependentPoller<T> {
         let mut step = 0usize;
         let duration = Duration::from_millis(self.config.interval_ms);
         let mut interval = tokio_time::interval(duration);
-        let target = self.provider.target();
-        let test_type = self.provider.whoami();
 
-        // interval.tick().await;
         info!(
             "IndependentPoller started with interval={}ms. Provider={} Strategy={:?}",
             duration.as_millis(),
@@ -124,12 +120,8 @@ impl<T: Pollable> IndependentPoller<T> {
         loop {
             interval.tick().await;
             step += 1;
-            let payload = poll_with_retries(
-                &self.provider,
-                self.config.retries,
-                self.config.retries_delay_ms,
-            )
-            .await;
+            let payload =
+                poll_with_retries(self.provider.as_ref(), &self.config).await;
 
             let envelope = Event::PollResult {
                 strategy: Strategy::Independent,
@@ -145,56 +137,59 @@ impl<T: Pollable> IndependentPoller<T> {
 
 pub struct SynchronizedPoller {
     providers: Vec<Box<dyn Pollable>>,
-    interval: Duration,
+    config: PollerConfig,
     tx: mpsc::Sender<Event>,
 }
 
-/*
 impl SynchronizedPoller {
-
     pub fn new(
-        tasks: Vec<Box<dyn Pollable>>,
-        interval: u64,
-        tx: mpsc::Sender<PollEvent>,
+        providers: Vec<Box<dyn Pollable>>,
+        config: PollerConfig,
+        tx: mpsc::Sender<Event>,
     ) -> Self {
-        let interval = Duration::from_secs(interval);
         Self {
-            tasks,
-            interval,
+            providers: providers,
+            config,
             tx,
         }
     }
 
     pub async fn run(self) {
-        let mut interval = tokio_time::interval(self.interval);
+        let duration = Duration::from_millis(self.config.interval_ms);
+        let mut interval = tokio_time::interval(duration);
         let mut step = 0usize;
         // interval.tick().await;
+
         info!(
-            "SynchronizedPoller started with interval={}s. Count tasks={:?} Strategy={:?}",
-            self.interval.as_secs(),
-            self.tasks.len(),
+            "SynchronizedPoller started with interval={}ms. Count providers={:?} Strategy={:?}",
+            duration.as_millis(),
+            self.providers.len(),
             Strategy::Synchronized,
         );
+
+        for (i, p) in self.providers.iter().enumerate() {
+            info!("Provider {}: {}", i + 1, p.whoami())
+        }
 
         loop {
             interval.tick().await;
             step += 1;
             let mut futures = FuturesUnordered::new();
-            for task in &self.tasks {
-                futures.push(task.fetch());
+            for provider in &self.providers {
+                futures
+                    .push(poll_with_retries(provider.as_ref(), &self.config));
             }
 
-            while let Some(result) = futures.next().await {
-                let envelope = PollEvent {
-                    step,
-                    log_event: result,
+            while let Some(payload) = futures.next().await {
+                let envelope = Event::PollResult {
                     strategy: Strategy::Synchronized,
+                    step,
+                    payload,
                 };
                 if let Err(e) = self.tx.send(envelope).await {
-                    error!("Failed to send log event: {}", e);
+                    error!("Failed to send poll event: {}", e);
                 }
             }
         }
     }
 }
-*/

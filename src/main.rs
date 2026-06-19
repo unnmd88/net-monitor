@@ -7,11 +7,11 @@ mod logging;
 mod models;
 mod poller;
 mod sender;
-// mod snmp;
+mod snmp;
 mod traits;
 mod utils;
 
-use std::time::Duration;
+use std::{task::Poll, time::Duration};
 use tokio::sync::mpsc::{self};
 use tracing::{error, info};
 
@@ -25,11 +25,9 @@ use crate::{
         PollType,
         Strategy, //SynchronizedProviderConfig,
     },
-    poller::{
-        IndependentPoller, IndependentPollerConfiguration, SynchronizedPoller,
-    },
+    poller::{IndependentPoller, PollerConfig, SynchronizedPoller},
     sender::{EventSender, JsonSender},
-    //snmp::SnmpProvider,
+    snmp::SnmpProvider,
     traits::Pollable,
     utils::{get_session_id, get_timestamp_fmt},
 };
@@ -107,7 +105,7 @@ fn init_tracert(config: &Config) -> Result<Option<TracertProvider>, String> {
     Ok(tracert)
 }
 
-fn init_icmp_provider(config: &Config) -> Result<IcmpProvider, String> {
+async fn init_icmp_provider(config: &Config) -> Result<IcmpProvider, String> {
     let tracert = init_tracert(&config)?;
 
     let icmp_provider = match IcmpProvider::new(
@@ -127,14 +125,13 @@ fn init_icmp_provider(config: &Config) -> Result<IcmpProvider, String> {
     Ok(icmp_provider)
 }
 
-/*
 async fn init_snmp_provider(config: &Config) -> Result<SnmpProvider, String> {
     let snmp_provider = match SnmpProvider::new(
         config.network.target,
         config.snmp.port,
         config.snmp.community.clone(),
         config.snmp.oids.clone(),
-        config.snmp.timeout_seconds,
+        config.snmp.timeout_ms,
         config.snmp.retries,
     )
     .await
@@ -149,24 +146,35 @@ async fn init_snmp_provider(config: &Config) -> Result<SnmpProvider, String> {
     info!("{SNMP_PROVIDER} {INIT_SUCCESSFULLY}.");
     Ok(snmp_provider)
 }
-*/
 
-fn create_independent_ping_poller<T: Pollable>(
-    provider: T,
+pub fn create_independent_poller(
+    provider: Box<dyn Pollable>,
     config: &Config,
     tx: mpsc::Sender<Event>,
-) -> IndependentPoller<T> {
-    let poller_config = IndependentPollerConfiguration {
-        interval_ms: config.independent.ping.interval_ms,
-        retries: config.independent.ping.retries,
-        retries_delay_ms: config.independent.ping.retries_delay_ms,
-        tx,
+) -> IndependentPoller {
+    let provider_whoami = provider.whoami();
+    let poller_config = match provider_whoami {
+        PollType::Ping => PollerConfig {
+            interval_ms: config.independent.ping.interval_ms,
+            retries: config.independent.ping.retries,
+            retries_delay_ms: config.independent.ping.retries_delay_ms,
+        },
+        PollType::Snmp => PollerConfig {
+            interval_ms: config.independent.snmp.interval_ms,
+            retries: config.independent.snmp.retries,
+            retries_delay_ms: config.independent.snmp.retries_delay_ms,
+        },
     };
-    IndependentPoller::new(provider, poller_config)
+
+    let poller = IndependentPoller::new(provider, poller_config, tx);
+    info!(
+        "IndependentPoller created successfully. Provider: {provider_whoami}"
+    );
+    poller
 }
 
-fn spawn_independent_poll<T: Pollable + 'static>(
-    poller: IndependentPoller<T>,
+fn spawn_independent_poll(
+    poller: IndependentPoller,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(poller.run())
 }
@@ -232,24 +240,18 @@ async fn app() -> Result<(), String> {
 
     match current_strategy {
         Strategy::Independent => {
-            let mut pollers = Vec::new();
-
+            let mut providers: Vec<Box<dyn Pollable>> = Vec::new();
             if config.independent.ping.enabled {
-                let icmp_provider = init_icmp_provider(&config)?;
-                let poller = create_independent_ping_poller(
-                    icmp_provider,
-                    &config,
-                    tx.clone(),
-                );
-                pollers.push(poller);
+                providers.push(Box::new(init_icmp_provider(&config).await?));
             }
-            /*
-                        if config.independent.snmp.enabled {
-                            let snmp_provider = init_snmp_provider(...);
-                            let poller = create
-                        }
+            if config.independent.snmp.enabled {
+                providers.push(Box::new(init_snmp_provider(&config).await?));
+            }
 
-            */
+            let pollers: Vec<IndependentPoller> = providers
+                .into_iter()
+                .map(|p| create_independent_poller(p, &config, tx.clone()))
+                .collect();
 
             let config_event = Event::Config {
                 strategy: Strategy::Independent,

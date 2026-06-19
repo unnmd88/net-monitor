@@ -64,7 +64,7 @@ pub struct TracertConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct SnmpConfig {
-    pub timeout_seconds: u64,
+    pub timeout_ms: u64,
     pub port: u16,
     pub community: String,
     pub retries: u32,
@@ -77,22 +77,16 @@ pub struct SnmpConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct IndependentStrategyConfig {
-    pub ping: IndependentPingConfig,
-    pub snmp: IndependentSnmpConfig,
+    pub ping: IndependentProviderConfig,
+    pub snmp: IndependentProviderConfig,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct IndependentPingConfig {
+pub struct IndependentProviderConfig {
     pub enabled: bool,
     pub interval_ms: u64,
     pub retries: u8,
     pub retries_delay_ms: u64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct IndependentSnmpConfig {
-    pub enabled: bool,
-    pub interval_ms: u64,
 }
 
 // ============================================
@@ -101,6 +95,6 @@ pub struct IndependentSnmpConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct SynchronizedStrategyConfig {
-    pub interval_seconds: u64,
+    pub interval_ms: u64,
     pub jobs: Vec<PollType>,
 }
