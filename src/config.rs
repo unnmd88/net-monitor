@@ -96,5 +96,7 @@ pub struct IndependentProviderConfig {
 #[derive(Debug, Deserialize)]
 pub struct SynchronizedStrategyConfig {
     pub interval_ms: u64,
+    pub retries: u8,
+    pub retries_delay_ms: u64,
     pub jobs: Vec<PollType>,
 }

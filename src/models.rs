@@ -86,8 +86,7 @@ pub enum ConfigStrategyDetails {
         pollers: Vec<IndependentPollerConfig>,
     },
     Synchronized {
-        interval_seconds: u64,
-        providers: Vec<ProviderConfig>,
+        data: SynchronizedPollerConfig,
     },
 }
 
@@ -95,6 +94,14 @@ pub enum ConfigStrategyDetails {
 pub struct IndependentPollerConfig {
     #[serde(flatten)]
     pub provider: ProviderConfig,
+    pub retries: u8,
+    pub retries_interval_ms: u64,
+    pub interval_ms: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SynchronizedPollerConfig {
+    pub providers: Vec<ProviderConfig>,
     pub retries: u8,
     pub retries_interval_ms: u64,
     pub interval_ms: u64,

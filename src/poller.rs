@@ -1,6 +1,9 @@
 use crate::config;
 use crate::constants::TIME_FMT;
-use crate::models::{Event, FetchResult, IndependentPollerConfig, Strategy};
+use crate::models::{
+    Event, FetchResult, IndependentPollerConfig, Strategy,
+    SynchronizedPollerConfig,
+};
 use crate::traits::Pollable;
 use chrono::Local;
 use futures_util::StreamExt;
@@ -112,8 +115,10 @@ impl IndependentPoller {
         let mut interval = tokio_time::interval(duration);
 
         info!(
-            "IndependentPoller started with interval={}ms. Provider={} Strategy={:?}",
+            "IndependentPoller started. Interval={}ms retries={} retries_interval={}ms. Provider={} Strategy={:?}",
             duration.as_millis(),
+            self.config.retries,
+            self.config.retries_delay_ms,
             self.provider.whoami(),
             Strategy::Independent,
         );
@@ -152,6 +157,23 @@ impl SynchronizedPoller {
             config,
             tx,
         }
+    }
+
+    pub fn dump(&self) -> SynchronizedPollerConfig {
+        SynchronizedPollerConfig {
+            providers: self
+                .providers
+                .iter()
+                .map(|p| p.dump())
+                .collect(),
+            retries: self.config.retries,
+            retries_interval_ms: self.config.retries_delay_ms,
+            interval_ms: self.config.interval_ms,
+        }
+    }
+
+    pub fn interval_ms(&self) -> u64 {
+        self.config.interval_ms
     }
 
     pub async fn run(self) {
