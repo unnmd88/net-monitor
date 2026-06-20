@@ -25,14 +25,15 @@ impl SnmpProvider {
         community: String,
         oids: Vec<String>,
         timeout_ms: u64,
-        retries: u32,
+        //retries: u32,
     ) -> Result<Self, String> {
         let client = match Client::builder(
             (target.to_string(), port),
             Auth::v2c(&community),
         )
         .timeout(Duration::from_millis(timeout_ms))
-        .retry(Retry::fixed(retries, Duration::ZERO))
+        //.retry(Retry::fixed(retries, Duration::ZERO))
+        .retry(Retry::none())
         .connect()
         .await
         {

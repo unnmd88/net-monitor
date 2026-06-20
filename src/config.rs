@@ -6,29 +6,15 @@ use crate::models::{PollType, Strategy};
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    //pub output: OutputConfig,
+    pub strategy: Strategy,
     pub log: String,
     pub network: NetworkConfig,
-    pub ping: PingConfig,
-    pub tracert: TracertConfig,
-    pub snmp: SnmpConfig,
     pub independent: IndependentStrategyConfig,
     pub synchronized: SynchronizedStrategyConfig,
-    pub strategy: Strategy,
 }
 
 // ============================================
-// ВЫХОДНЫЕ ФАЙЛЫ
-// ============================================
-
-//#[derive(Debug, Deserialize)]
-//pub struct OutputConfig {
-//    pub csv_path: String,
-//    pub txt_path: String,
-//}
-
-// ============================================
-// СЕТЕВЫЕ НАСТРОЙКИ
+// NETWORK
 // ============================================
 
 #[derive(Debug, Deserialize)]
@@ -37,66 +23,72 @@ pub struct NetworkConfig {
 }
 
 // ============================================
-// НАСТРОЙКИ PING
+// INDEPENDENT STRATEGY
 // ============================================
+#[derive(Debug, Deserialize, Default)]
+pub struct IndependentStrategyConfig {
+    pub tracert: IndependentTracertConfig,
+    pub ping: IndependentPingConfig,
+    pub snmp: IndependentSnmpConfig,
+}
 
-#[derive(Debug, Deserialize)]
-pub struct PingConfig {
+#[derive(Debug, Deserialize, Default)]
+pub struct IndependentTracertConfig {
+    pub enabled: bool,
+    pub max_hops: u32,
+    pub queries_per_hop: u32,
+}
+
+// Ping для Independent
+#[derive(Debug, Deserialize, Default)]
+pub struct IndependentPingConfig {
+    pub enabled: bool,
+    pub interval_ms: u64,
     pub timeout_ms: u64,
     pub fallback_tracert: bool,
-    //pub fallback_tracert_delay_seconds: u64,
+    pub retries: u8,
+    pub retries_delay_ms: u64,
 }
 
-// ============================================
-// НАСТРОЙКИ TRACERT
-// ============================================
-
-#[derive(Debug, Deserialize)]
-pub struct TracertConfig {
-    pub max_hops: u8,
-    //pub probe_timeout_seconds: u64,
-    pub queries_per_hop: u8,
-}
-
-// ============================================
-// НАСТРОЙКИ SNMP
-// ============================================
-
-#[derive(Debug, Deserialize)]
-pub struct SnmpConfig {
+// Snmp для Independent
+#[derive(Debug, Deserialize, Default)]
+pub struct IndependentSnmpConfig {
+    pub enabled: bool,
+    pub interval_ms: u64,
     pub timeout_ms: u64,
     pub port: u16,
     pub community: String,
-    pub retries: u32,
+    pub retries: u8,
+    pub retries_delay_ms: u64,
     pub oids: Vec<String>,
 }
 
 // ============================================
-// Independent СТРАТЕГИЯ
+// SYNCHRONIZED STRATEGY
 // ============================================
-
-#[derive(Debug, Deserialize)]
-pub struct IndependentStrategyConfig {
-    pub ping: IndependentProviderConfig,
-    pub snmp: IndependentProviderConfig,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct IndependentProviderConfig {
-    pub enabled: bool,
-    pub interval_ms: u64,
-    pub retries: u8,
-    pub retries_delay_ms: u64,
-}
-
-// ============================================
-// Synhronized СТРАТЕГИЯ
-// ============================================
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct SynchronizedStrategyConfig {
-    pub interval_ms: u64,
+    pub interval_ms: u64, // общий для всех провайдеров
+    pub ping: SynchronizedPingConfig,
+    pub snmp: SynchronizedSnmpConfig,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct SynchronizedPingConfig {
+    pub enabled: bool,
+    pub timeout_ms: u64,
+    pub fallback_tracert: bool,
     pub retries: u8,
     pub retries_delay_ms: u64,
-    pub jobs: Vec<PollType>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct SynchronizedSnmpConfig {
+    pub enabled: bool,
+    pub timeout_ms: u64,
+    pub port: u16,
+    pub community: String,
+    pub retries: u8,
+    pub retries_delay_ms: u64,
+    pub oids: Vec<String>,
 }

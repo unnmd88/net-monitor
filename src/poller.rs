@@ -15,7 +15,7 @@ use tracing::{error, info};
 
 async fn poll_with_retries(
     provider: &dyn Pollable,
-    config: &PollerConfig,
+    config: &PollTimings,
 ) -> FetchResult {
     let now = Local::now();
     let started_at = now.format(TIME_FMT).to_string();
@@ -65,32 +65,22 @@ async fn poll_with_retries(
 }
 
 #[derive(Debug, Clone)]
-pub struct PollerConfig {
+pub struct PollTimings {
     pub interval_ms: u64,
     pub retries: u8,
     pub retries_delay_ms: u64,
 }
 
-impl PollerConfig {
-    pub fn new(interval_ms: u64, retries: u8, retries_delay_ms: u64) -> Self {
-        Self {
-            interval_ms,
-            retries,
-            retries_delay_ms,
-        }
-    }
-}
-
 pub struct IndependentPoller {
     provider: Box<dyn Pollable>,
-    config: PollerConfig,
+    config: PollTimings,
     tx: mpsc::Sender<Event>,
 }
 
 impl IndependentPoller {
     pub fn new(
         provider: Box<dyn Pollable>,
-        config: PollerConfig,
+        config: PollTimings,
         tx: mpsc::Sender<Event>,
     ) -> Self {
         Self {
@@ -122,6 +112,15 @@ impl IndependentPoller {
             self.provider.whoami(),
             Strategy::Independent,
         );
+
+        println!(
+            "Опрос {} запущен. Интервал={}мс. Количество попыток в опросе={}. Пауза между попытками: {}мс",
+            self.provider.whoami(),
+            duration.as_millis(),
+            self.config.retries,
+            self.config.retries_delay_ms,
+        );
+
         loop {
             interval.tick().await;
             step += 1;
@@ -142,14 +141,14 @@ impl IndependentPoller {
 
 pub struct SynchronizedPoller {
     providers: Vec<Box<dyn Pollable>>,
-    config: PollerConfig,
+    config: PollTimings,
     tx: mpsc::Sender<Event>,
 }
 
 impl SynchronizedPoller {
     pub fn new(
         providers: Vec<Box<dyn Pollable>>,
-        config: PollerConfig,
+        config: PollTimings,
         tx: mpsc::Sender<Event>,
     ) -> Self {
         Self {
@@ -166,8 +165,6 @@ impl SynchronizedPoller {
                 .iter()
                 .map(|p| p.dump())
                 .collect(),
-            retries: self.config.retries,
-            retries_interval_ms: self.config.retries_delay_ms,
             interval_ms: self.config.interval_ms,
         }
     }
@@ -189,9 +186,20 @@ impl SynchronizedPoller {
             Strategy::Synchronized,
         );
 
+        let mut oup_message = format!(
+            "Запущен синхронизированный опрос c интервалом={}мс. Общее количество опросов={}.",
+            duration.as_millis(),
+            self.providers.len(),
+        );
+
         for (i, p) in self.providers.iter().enumerate() {
-            info!("Provider {}: {}", i + 1, p.whoami())
+            let cnt = i + 1;
+            let name = p.whoami();
+
+            info!("Provider {cnt}: {name}");
+            oup_message = format!("{}\nОпрос {cnt}: {name}", &oup_message)
         }
+        println!("{oup_message}");
 
         loop {
             interval.tick().await;
