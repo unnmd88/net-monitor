@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::Local;
+use clap::builder::Str;
 use ping_async::{IcmpEchoReply, IcmpEchoRequestor, IcmpEchoStatus};
 use serde::Serialize;
 use serde_json;
@@ -11,6 +12,7 @@ use tokio::time::sleep;
 use trippy_core::{Builder, Protocol};
 
 use crate::constants::TIME_FMT;
+use crate::models::Strategy;
 use crate::models::{Event, PollType, ProviderConfig};
 use crate::traits::Pollable;
 
@@ -96,6 +98,7 @@ impl TracertProvider {
 }
 
 pub struct IcmpProvider {
+    username: String,
     pub target: IpAddr,
     requestor: IcmpEchoRequestor,
     tracert: Option<TracertProvider>,
@@ -104,6 +107,7 @@ pub struct IcmpProvider {
 
 impl IcmpProvider {
     pub fn new(
+        username: String,
         target: IpAddr,
         timeout_ms: u64,
         tracert: Option<TracertProvider>,
@@ -118,6 +122,7 @@ impl IcmpProvider {
         .map_err(|e| format!("Ошибка создания ping-опроса: {e}"))?;
 
         Ok(Self {
+            username,
             target,
             requestor,
             tracert,
@@ -161,15 +166,16 @@ impl IcmpProvider {
 
     pub fn dump(&self) -> ProviderConfig {
         ProviderConfig {
-            name: self.whoami(),
+            poll_type: self.whoami(),
+            username: self.username(),
             target: self.target,
             timeout_ms: self.timeout_ms,
             extra: self.get_extra(),
         }
     }
 
-    pub fn get_name(&self) -> String {
-        "IcmpProvider".to_string()
+    pub fn name(&self) -> String {
+        self.username.clone()
     }
 }
 
@@ -193,7 +199,7 @@ impl Pollable for IcmpProvider {
         PollType::Ping
     }
 
-    fn get_provider_name(&self) -> String {
-        self.get_name()
+    fn username(&self) -> String {
+        self.name()
     }
 }

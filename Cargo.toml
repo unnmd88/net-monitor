@@ -9,6 +9,7 @@ async-fd-lock = "0.2.0"
 async-snmp = "0.12.0"
 async-trait = "0.1.89"
 chrono = "0.4.44"
+clap = { version = "4.6.1", features = ["derive"] }
 futures-util = "0.3.32"
 ping-async = "1.0.2"
 serde = { version = "1.0.228", features = ["derive"] }

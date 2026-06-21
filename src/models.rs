@@ -47,6 +47,7 @@ pub struct Envelope {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FetchResult {
+    pub username: String,
     pub test_type: PollType,
     pub target: IpAddr,
     pub start: String,
@@ -84,6 +85,7 @@ pub enum Event {
 pub enum ConfigStrategyDetails {
     Independent {
         pollers: Vec<IndependentPollerConfig>,
+        num_pollers: u8,
     },
     Synchronized {
         #[serde(flatten)]
@@ -104,11 +106,14 @@ pub struct IndependentPollerConfig {
 pub struct SynchronizedPollerConfig {
     pub providers: Vec<ProviderConfig>,
     pub interval_ms: u64,
+    pub num_providers: u8,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProviderConfig {
-    pub name: PollType,
+    #[serde(rename = "type")]
+    pub poll_type: PollType,
+    pub username: String,
     pub target: IpAddr,
     pub timeout_ms: u64,
     pub extra: Option<serde_json::Value>,

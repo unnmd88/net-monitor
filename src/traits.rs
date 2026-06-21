@@ -7,7 +7,7 @@ use crate::models::{Event, PollType, ProviderConfig};
 #[async_trait]
 pub trait Pollable: Send + Sync {
     async fn fetch(&self) -> Result<String, String>;
-    fn get_provider_name(&self) -> String;
+    fn username(&self) -> String;
     fn target(&self) -> IpAddr;
     fn whoami(&self) -> PollType;
     fn dump(&self) -> ProviderConfig;

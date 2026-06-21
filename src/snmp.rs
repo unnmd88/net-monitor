@@ -1,6 +1,7 @@
 use async_snmp::{Auth, Client, Oid, Retry};
 use async_trait::async_trait;
 use chrono::Local;
+use clap::builder::Str;
 use serde_json::json;
 use std::net::IpAddr;
 use std::time::Duration;
@@ -11,6 +12,7 @@ use crate::models::{Event, PollType, ProviderConfig};
 use crate::traits::Pollable;
 
 pub struct SnmpProvider {
+    username: String,
     pub target: IpAddr,
     pub port: u16,
     client: Client,
@@ -20,6 +22,7 @@ pub struct SnmpProvider {
 
 impl SnmpProvider {
     pub async fn new(
+        username: String,
         target: IpAddr,
         port: u16,
         community: String,
@@ -49,6 +52,7 @@ impl SnmpProvider {
         let oids = create_oids(&oids)?;
 
         Ok(Self {
+            username: username,
             target,
             port,
             client,
@@ -89,15 +93,16 @@ impl SnmpProvider {
 
     pub fn dump(&self) -> ProviderConfig {
         ProviderConfig {
-            name: self.whoami(),
+            poll_type: self.whoami(),
+            username: self.username(),
             target: self.target,
             timeout_ms: self.timeout_ms,
             extra: self.get_extra(),
         }
     }
 
-    pub fn get_name(&self) -> String {
-        "SnmpProvider".to_string()
+    pub fn username(&self) -> String {
+        self.username.clone()
     }
 }
 
@@ -119,8 +124,8 @@ impl Pollable for SnmpProvider {
         PollType::Snmp
     }
 
-    fn get_provider_name(&self) -> String {
-        self.get_name()
+    fn username(&self) -> String {
+        self.username()
     }
 }
 
