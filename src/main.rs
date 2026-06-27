@@ -5,6 +5,7 @@ mod cli;
 mod constants;
 mod event_loop;
 mod icmp;
+mod log_parser;
 mod logging;
 mod models;
 mod poller;
@@ -13,17 +14,18 @@ mod snmp;
 mod traits;
 mod utils;
 
-use std::{net::IpAddr, task::Poll, time::Duration};
+use std::{fmt::format, fs::File, net::IpAddr, task::Poll, time::Duration};
 use tokio::sync::mpsc::{self};
 use tracing::{error, info};
 
 use crate::{
-    cli::{Cli, Command},
+    cli::{Cli, Command, OutputFormat},
     config::{
         Config, IndependentPingInstance, IndependentSnmpInstance,
         IndependentTracertInstance,
     },
     icmp::{IcmpProvider, TracertProvider},
+    log_parser::LogParser,
     models::{
         ConfigStrategyDetails,
         Event,
@@ -190,22 +192,7 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Command::Analyze { log_file, detailed }) => {
-            // Анализ логов
-            // TODO
-        }
-        Some(Command::GenerateConfig {
-            output,
-            force,
-            show,
-        }) => {
-            if let Err(e) = Config::generate_default(&output, force, show) {
-                eprintln!("{}", e);
-                std::process::exit(1);
-            }
-        }
-        None => {
-            // Запускаем опросник по умолчанию
+        Command::Start { config } => {
             let _guard = logging::init_tracing();
             info!("{} Setup new monitor... {}", "#".repeat(40), "#".repeat(40));
             println!("Настраиваю монитор опроса...");
@@ -214,7 +201,7 @@ async fn main() {
 
             tokio::time::sleep(Duration::from_millis(800)).await;
 
-            let config = match Config::from_file(&cli.config) {
+            let config = match Config::from_file(&config) {
                 Ok(c) => c,
                 Err(e) => {
                     error!("Setup monitor stopped: {}", e);
@@ -227,6 +214,52 @@ async fn main() {
                 error!("Setup monitor stopped.");
                 eprintln!("{}", user_err_message);
                 std::process::exit(1);
+            }
+        }
+
+        Command::GenerateConfig {
+            output,
+            force,
+            show,
+        } => {
+            if let Err(e) = Config::generate_default(&output, force, show) {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+        }
+        Command::ProcessLog { log, format } => {
+            let source = match File::open(&log) {
+                Ok(file) => file,
+                Err(e) => {
+                    eprintln!("Не удалось открыть файл: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            println!("Файл лога прочитан успешно.");
+
+            let parser = LogParser::new(source);
+
+            match format {
+                OutputFormat::Console => match parser.to_console() {
+                    Ok(stats) => {
+                        println!("Лог обработан.\n{}", stats.view_as_string())
+                    }
+                    Err(e) => {
+                        error!("parse to console failed: {}", &e);
+                        eprintln!("Ошибка: {}", &e)
+                    }
+                },
+                OutputFormat::Csv => match parser.to_csv() {
+                    Ok(details) => println!(
+                        "Лог обработан.\n{}\nСозданный csv файл: `{}`",
+                        details.stats.view_as_string(),
+                        details.path,
+                    ),
+                    Err(e) => {
+                        error!("parse to csv failed: {}", &e);
+                        eprintln!("Ошибка: {}", &e)
+                    }
+                },
             }
         }
     }
@@ -254,141 +287,277 @@ async fn app(config: Config, session_id: String) -> Result<(), String> {
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     let mut spawned_tasks = Vec::new();
-    let current_strategy = config.strategy;
-    println!("Выбрана стратегия мониторинга: {current_strategy}");
-    info!("Setup {:?} strategy.", current_strategy);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    match current_strategy {
-        Strategy::Independent => {
-            // let mut providers: Vec<Box<dyn Pollable>> = Vec::new();
-            let mut pollers: Vec<IndependentPoller> = Vec::new();
+    if config.independent_enabled {
+        println!("Настройка стратегии: {}", Strategy::Independent);
+        info!("Setup {:?} strategy.", Strategy::Independent);
+        // let mut providers: Vec<Box<dyn Pollable>> = Vec::new();
+        let mut pollers: Vec<IndependentPoller> = Vec::new();
 
-            for ping_instance in config.independent.ping {
-                let provider = init_icmp_provider(
-                    ping_instance.name,
-                    config.network.target,
-                    ping_instance.timeout_ms,
-                )
-                .await?;
-                let poll_config = PollConfig {
-                    retries: ping_instance.retries,
-                    retries_delay_ms: ping_instance.retries_delay_ms,
-                };
-                let poller = create_independent_poller(
-                    Box::new(provider),
-                    ping_instance.interval_ms,
-                    poll_config,
-                    tx.clone(),
-                );
-                pollers.push(poller);
-            }
-
-            for snmp_instance in config.independent.snmp {
-                let provider = init_snmp_provider(
-                    snmp_instance.name,
-                    config.network.target,
-                    snmp_instance.timeout_ms,
-                    snmp_instance.port,
-                    snmp_instance.community.clone(),
-                    snmp_instance.oids.clone(),
-                )
-                .await?;
-                let timings = PollConfig {
-                    retries: snmp_instance.retries,
-                    retries_delay_ms: snmp_instance.retries_delay_ms,
-                };
-
-                let poller = create_independent_poller(
-                    Box::new(provider),
-                    snmp_instance.interval_ms,
-                    timings,
-                    tx.clone(),
-                );
-                pollers.push(poller);
-            }
-
-            let config_event = Event::Config {
-                strategy: Strategy::Independent,
-                details: ConfigStrategyDetails::Independent {
-                    num_pollers: pollers.len() as u8,
-                    pollers: pollers
-                        .iter()
-                        .map(|poller| poller.dump())
-                        .collect(),
-                },
+        for ping_instance in config.independent.ping {
+            let provider = init_icmp_provider(
+                ping_instance.name,
+                ping_instance.target,
+                ping_instance.timeout_ms,
+            )
+            .await?;
+            let poll_config = PollConfig {
+                retries: ping_instance.retries,
+                retries_delay_ms: ping_instance.retries_delay_ms,
             };
-            tx.send(config_event)
-                .await
-                .map_err(|e| e.to_string())?;
-
-            for p in pollers {
-                spawned_tasks.push(spawn_independent_poll(p));
-            }
-        }
-
-        Strategy::Synchronized => {
-            let mut providers: Vec<(Box<dyn Pollable>, PollConfig)> =
-                Vec::new();
-
-            for ping_instance in config.synchronized.ping {
-                let provider = init_icmp_provider(
-                    ping_instance.name,
-                    config.network.target,
-                    ping_instance.timeout_ms,
-                )
-                .await?;
-                let poll_config = PollConfig {
-                    retries: ping_instance.retries,
-                    retries_delay_ms: ping_instance.retries_delay_ms,
-                };
-                let provider_whoami = provider.whoami();
-                providers.push((Box::new(provider), poll_config));
-                info!(
-                    "Added {} provider for {} strategy.",
-                    provider_whoami, &current_strategy
-                );
-            }
-
-            for snmp_instance in config.synchronized.snmp {
-                let provider = init_snmp_provider(
-                    snmp_instance.name,
-                    config.network.target,
-                    snmp_instance.timeout_ms,
-                    snmp_instance.port,
-                    snmp_instance.community.clone(),
-                    snmp_instance.oids.clone(),
-                )
-                .await?;
-                let poll_config = PollConfig {
-                    retries: snmp_instance.retries,
-                    retries_delay_ms: snmp_instance.retries_delay_ms,
-                };
-                providers.push((Box::new(provider), poll_config));
-            }
-
-            let poller = SynchronizedPoller::new(
-                providers,
-                config.synchronized.interval_ms,
+            let poller = create_independent_poller(
+                Box::new(provider),
+                ping_instance.interval_ms,
+                poll_config,
                 tx.clone(),
             );
+            pollers.push(poller);
+        }
 
-            info!("{} strtegy poller created successfully.", current_strategy);
-
-            let config_event = Event::Config {
-                strategy: current_strategy,
-                details: ConfigStrategyDetails::Synchronized {
-                    config: poller.dump(),
-                },
+        for snmp_instance in config.independent.snmp {
+            let provider = init_snmp_provider(
+                snmp_instance.name,
+                snmp_instance.target,
+                snmp_instance.timeout_ms,
+                snmp_instance.port,
+                snmp_instance.community.clone(),
+                snmp_instance.oids.clone(),
+            )
+            .await?;
+            let timings = PollConfig {
+                retries: snmp_instance.retries,
+                retries_delay_ms: snmp_instance.retries_delay_ms,
             };
 
-            tx.send(config_event)
-                .await
-                .map_err(|e| e.to_string())?;
+            let poller = create_independent_poller(
+                Box::new(provider),
+                snmp_instance.interval_ms,
+                timings,
+                tx.clone(),
+            );
+            pollers.push(poller);
+        }
 
-            spawned_tasks.push(spawn_synchronized_poll(poller));
+        let config_event = Event::Config {
+            strategy: Strategy::Independent,
+            details: ConfigStrategyDetails::Independent {
+                num_pollers: pollers.len() as u8,
+                pollers: pollers
+                    .iter()
+                    .map(|poller| poller.dump())
+                    .collect(),
+            },
+        };
+        tx.send(config_event)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        for p in pollers {
+            spawned_tasks.push(spawn_independent_poll(p));
         }
     }
+
+    if config.synchronized_enabled {
+        println!("Настройка стратегии: {}", Strategy::Synchronized);
+        info!("Setup {:?} strategy.", Strategy::Synchronized);
+
+        let mut providers: Vec<(Box<dyn Pollable>, PollConfig)> = Vec::new();
+
+        for ping_instance in config.synchronized.ping {
+            let provider = init_icmp_provider(
+                ping_instance.name,
+                ping_instance.target,
+                ping_instance.timeout_ms,
+            )
+            .await?;
+            let poll_config = PollConfig {
+                retries: ping_instance.retries,
+                retries_delay_ms: ping_instance.retries_delay_ms,
+            };
+            let provider_whoami = provider.whoami();
+            providers.push((Box::new(provider), poll_config));
+            info!(
+                "Added {} provider for {} strategy.",
+                provider_whoami,
+                Strategy::Synchronized
+            );
+        }
+
+        for snmp_instance in config.synchronized.snmp {
+            let provider = init_snmp_provider(
+                snmp_instance.name,
+                snmp_instance.target,
+                snmp_instance.timeout_ms,
+                snmp_instance.port,
+                snmp_instance.community.clone(),
+                snmp_instance.oids.clone(),
+            )
+            .await?;
+            let poll_config = PollConfig {
+                retries: snmp_instance.retries,
+                retries_delay_ms: snmp_instance.retries_delay_ms,
+            };
+            providers.push((Box::new(provider), poll_config));
+        }
+
+        let poller = SynchronizedPoller::new(
+            providers,
+            config.synchronized.interval_ms,
+            tx.clone(),
+        );
+
+        info!(
+            "{} strtegy poller created successfully.",
+            Strategy::Synchronized
+        );
+
+        let config_event = Event::Config {
+            strategy: Strategy::Synchronized,
+            details: ConfigStrategyDetails::Synchronized {
+                config: poller.dump(),
+            },
+        };
+
+        tx.send(config_event)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        spawned_tasks.push(spawn_synchronized_poll(poller));
+    }
+
+    /*
+        match current_strategy {
+            Strategy::Independent => {
+                // let mut providers: Vec<Box<dyn Pollable>> = Vec::new();
+                let mut pollers: Vec<IndependentPoller> = Vec::new();
+
+                for ping_instance in config.independent.ping {
+                    let provider = init_icmp_provider(
+                        ping_instance.name,
+                        config.network.target,
+                        ping_instance.timeout_ms,
+                    )
+                    .await?;
+                    let poll_config = PollConfig {
+                        retries: ping_instance.retries,
+                        retries_delay_ms: ping_instance.retries_delay_ms,
+                    };
+                    let poller = create_independent_poller(
+                        Box::new(provider),
+                        ping_instance.interval_ms,
+                        poll_config,
+                        tx.clone(),
+                    );
+                    pollers.push(poller);
+                }
+
+                for snmp_instance in config.independent.snmp {
+                    let provider = init_snmp_provider(
+                        snmp_instance.name,
+                        config.network.target,
+                        snmp_instance.timeout_ms,
+                        snmp_instance.port,
+                        snmp_instance.community.clone(),
+                        snmp_instance.oids.clone(),
+                    )
+                    .await?;
+                    let timings = PollConfig {
+                        retries: snmp_instance.retries,
+                        retries_delay_ms: snmp_instance.retries_delay_ms,
+                    };
+
+                    let poller = create_independent_poller(
+                        Box::new(provider),
+                        snmp_instance.interval_ms,
+                        timings,
+                        tx.clone(),
+                    );
+                    pollers.push(poller);
+                }
+
+                let config_event = Event::Config {
+                    strategy: Strategy::Independent,
+                    details: ConfigStrategyDetails::Independent {
+                        num_pollers: pollers.len() as u8,
+                        pollers: pollers
+                            .iter()
+                            .map(|poller| poller.dump())
+                            .collect(),
+                    },
+                };
+                tx.send(config_event)
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                for p in pollers {
+                    spawned_tasks.push(spawn_independent_poll(p));
+                }
+            }
+
+            Strategy::Synchronized => {
+                let mut providers: Vec<(Box<dyn Pollable>, PollConfig)> =
+                    Vec::new();
+
+                for ping_instance in config.synchronized.ping {
+                    let provider = init_icmp_provider(
+                        ping_instance.name,
+                        config.network.target,
+                        ping_instance.timeout_ms,
+                    )
+                    .await?;
+                    let poll_config = PollConfig {
+                        retries: ping_instance.retries,
+                        retries_delay_ms: ping_instance.retries_delay_ms,
+                    };
+                    let provider_whoami = provider.whoami();
+                    providers.push((Box::new(provider), poll_config));
+                    info!(
+                        "Added {} provider for {} strategy.",
+                        provider_whoami, &current_strategy
+                    );
+                }
+
+                for snmp_instance in config.synchronized.snmp {
+                    let provider = init_snmp_provider(
+                        snmp_instance.name,
+                        config.network.target,
+                        snmp_instance.timeout_ms,
+                        snmp_instance.port,
+                        snmp_instance.community.clone(),
+                        snmp_instance.oids.clone(),
+                    )
+                    .await?;
+                    let poll_config = PollConfig {
+                        retries: snmp_instance.retries,
+                        retries_delay_ms: snmp_instance.retries_delay_ms,
+                    };
+                    providers.push((Box::new(provider), poll_config));
+                }
+
+                let poller = SynchronizedPoller::new(
+                    providers,
+                    config.synchronized.interval_ms,
+                    tx.clone(),
+                );
+
+                info!("{} strtegy poller created successfully.", current_strategy);
+
+                let config_event = Event::Config {
+                    strategy: current_strategy,
+                    details: ConfigStrategyDetails::Synchronized {
+                        config: poller.dump(),
+                    },
+                };
+
+                tx.send(config_event)
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                spawned_tasks.push(spawn_synchronized_poll(poller));
+            }
+        }
+    */
 
     if spawned_tasks.is_empty() {
         return Err("Нет задач для опроса. Монитор не запущен.".to_string());

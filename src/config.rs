@@ -1,17 +1,15 @@
 use serde::Deserialize;
 use std::net::IpAddr;
-use tracing::{error, info};
-
-use crate::models::Strategy;
+use tracing::info;
 
 // ============================================
 // CONFIG
 // ============================================
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    pub strategy: Strategy,
     pub log: String,
-    pub network: NetworkConfig,
+    pub independent_enabled: bool,
+    pub synchronized_enabled: bool,
     pub independent: IndependentStrategyConfig,
     pub synchronized: SynchronizedStrategyConfig,
 }
@@ -35,11 +33,9 @@ impl Config {
         force: bool,
         show: bool,
     ) -> Result<(), String> {
-        let default = r#"strategy = "independent"
-log = "monitor.json"
-
-[network]
-target = "10.179.180.190"
+        let default = r#"log = "monitor.json"
+independent_enabled = true
+synchronized_enabled = true
 
 # ============================================
 # INDEPENDENT STRATEGY
@@ -47,38 +43,56 @@ target = "10.179.180.190"
 
 # ---------- PING ----------
 [[independent.ping]]
+enabled = true
 name = "fast"
+target = "10.179.180.190"
 interval_ms = 1000
 timeout_ms = 200
-fallback_tracert = false
 retries = 3
 retries_delay_ms = 200
 
+# fallback traceroute ВКЛЮЧЕН
+[independent.ping.fallback_tracert]
+type = "library"
+max_hops = 30
+queries_per_hop = 1
+timeout_ms = 1000
+
 [[independent.ping]]
+enabled = true
 name = "slow"
+target = "8.8.8.8"
 interval_ms = 5000
 timeout_ms = 500
-fallback_tracert = true
 retries = 5
 retries_delay_ms = 500
+# fallback_tracert НЕТ → выключен
 
 # ---------- SNMP ----------
 [[independent.snmp]]
+enabled = true
 name = "main"
+target = "10.179.180.190"
 interval_ms = 6000
 timeout_ms = 350
 port = 161
 community = "UTMC"
 retries = 2
 retries_delay_ms = 300
-oids = [
-    "1.3.6.1.2.1.1.3.0",
-    "1.3.6.1.4.1.13267.3.2.4.1.0",
-]
+oids = ["1.3.6.1.2.1.1.3.0"]
+
+# fallback traceroute ВКЛЮЧЕН
+[independent.snmp.fallback_tracert]
+type = "system"
+max_hops = 30
+queries_per_hop = 1
+timeout_ms = 2000
 
 # ---------- TRACERT ----------
 [[independent.tracert]]
+enabled = true
 name = "default"
+target = "10.179.180.190"
 interval_ms = 30000
 max_hops = 30
 queries_per_hop = 1
@@ -88,51 +102,57 @@ queries_per_hop = 1
 # ============================================
 
 [synchronized]
+enabled = true
 interval_ms = 4000
 
 # ---------- PING ----------
 [[synchronized.ping]]
-name = "primary"
+enabled = true
+name = "sync-ping"
+target = "10.179.180.190"
 timeout_ms = 200
-fallback_tracert = true
 retries = 3
 retries_delay_ms = 200
 
+[synchronized.ping.fallback_tracert]
+type = "library"
+max_hops = 30
+queries_per_hop = 1
+timeout_ms = 1000
+
 # ---------- SNMP ----------
 [[synchronized.snmp]]
-name = "main"
+enabled = true
+name = "sync-snmp"
+target = "10.179.180.190"
 timeout_ms = 350
 port = 161
 community = "UTMC"
 retries = 2
 retries_delay_ms = 300
-oids = [
-    "1.3.6.1.2.1.1.3.0",
-]
+oids = ["1.3.6.1.2.1.1.3.0"]
 
 # ---------- TRACERT ----------
 [[synchronized.tracert]]
-name = "default"
+enabled = true
+name = "sync-tracert"
+target = "10.179.180.190"
 max_hops = 30
 queries_per_hop = 1
 "#;
 
-        // Если --show — просто печатаем в консоль
         if show {
             println!("{}", default);
             return Ok(());
         }
 
-        // Проверяем, существует ли файл
         if std::fs::metadata(output).is_ok() && !force {
             return Err(format!(
-                "❌ Файл '{}' уже существует.\n\
-                 💡 Используйте --force для перезаписи.",
+                "❌ Файл '{}' уже существует.\n💡 Используйте --force для перезаписи.",
                 output
             ));
         }
 
-        // Сохраняем в файл
         std::fs::write(output, default).map_err(|e| {
             format!("❌ Не удалось записать '{}': {}", output, e)
         })?;
@@ -140,14 +160,6 @@ queries_per_hop = 1
         println!("✅ Дефолтный конфиг создан: {}", output);
         Ok(())
     }
-}
-
-// ============================================
-// NETWORK
-// ============================================
-#[derive(Debug, Deserialize)]
-pub struct NetworkConfig {
-    pub target: IpAddr,
 }
 
 // ============================================
@@ -163,18 +175,23 @@ pub struct IndependentStrategyConfig {
 // ---------- PING ----------
 #[derive(Debug, Deserialize)]
 pub struct IndependentPingInstance {
+    pub enabled: bool,
     pub name: String,
+    pub target: IpAddr,
     pub interval_ms: u64,
     pub timeout_ms: u64,
-    pub fallback_tracert: bool,
     pub retries: u8,
     pub retries_delay_ms: u64,
+    #[serde(default)]
+    pub fallback_tracert: Option<FallbackTracertConfig>,
 }
 
 // ---------- SNMP ----------
 #[derive(Debug, Deserialize)]
 pub struct IndependentSnmpInstance {
+    pub enabled: bool,
     pub name: String,
+    pub target: IpAddr,
     pub interval_ms: u64,
     pub timeout_ms: u64,
     pub port: u16,
@@ -182,15 +199,19 @@ pub struct IndependentSnmpInstance {
     pub retries: u8,
     pub retries_delay_ms: u64,
     pub oids: Vec<String>,
+    #[serde(default)]
+    pub fallback_tracert: Option<FallbackTracertConfig>,
 }
 
 // ---------- TRACERT ----------
 #[derive(Debug, Deserialize)]
 pub struct IndependentTracertInstance {
+    pub enabled: bool,
     pub name: String,
+    pub target: IpAddr,
     pub interval_ms: u64,
-    pub max_hops: u32,
-    pub queries_per_hop: u32,
+    pub max_hops: u8,
+    pub queries_per_hop: u8,
 }
 
 // ============================================
@@ -198,6 +219,7 @@ pub struct IndependentTracertInstance {
 // ============================================
 #[derive(Debug, Deserialize, Default)]
 pub struct SynchronizedStrategyConfig {
+    pub enabled: bool,
     pub interval_ms: u64,
     pub ping: Vec<SynchronizedPingInstance>,
     pub snmp: Vec<SynchronizedSnmpInstance>,
@@ -207,31 +229,59 @@ pub struct SynchronizedStrategyConfig {
 // ---------- PING ----------
 #[derive(Debug, Deserialize)]
 pub struct SynchronizedPingInstance {
+    pub enabled: bool,
     pub name: String,
+    pub target: IpAddr,
     pub timeout_ms: u64,
-    pub fallback_tracert: bool,
     pub retries: u8,
     pub retries_delay_ms: u64,
+    #[serde(default)]
+    pub fallback_tracert: Option<FallbackTracertConfig>,
 }
 
 // ---------- SNMP ----------
 #[derive(Debug, Deserialize)]
 pub struct SynchronizedSnmpInstance {
+    pub enabled: bool,
     pub name: String,
+    pub target: IpAddr,
     pub timeout_ms: u64,
     pub port: u16,
     pub community: String,
     pub retries: u8,
     pub retries_delay_ms: u64,
     pub oids: Vec<String>,
+    #[serde(default)]
+    pub fallback_tracert: Option<FallbackTracertConfig>,
 }
 
 // ---------- TRACERT ----------
 #[derive(Debug, Deserialize)]
 pub struct SynchronizedTracertInstance {
+    pub enabled: bool,
     pub name: String,
-    pub max_hops: u32,
-    pub queries_per_hop: u32,
+    pub target: IpAddr,
+    pub max_hops: u8,
+    pub queries_per_hop: u8,
+}
+
+// ============================================
+// FALLBACK TRACEROUTE (НОВОЕ)
+// ============================================
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum TracertType {
+    Library,
+    System,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct FallbackTracertConfig {
+    #[serde(rename = "type")]
+    pub tracert_type: TracertType,
+    pub max_hops: u8,
+    pub queries_per_hop: u8,
+    pub timeout_ms: u64,
 }
 
 // ============================================

@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, builder::Str};
 
 /// Сетевая диагностическая утилита
 #[derive(Parser)]
@@ -6,25 +6,17 @@ use clap::{Parser, Subcommand};
 #[command(version = "1.0.0")]
 #[command(about = "Сбор и анализ сетевых метрик", long_about = None)]
 pub struct Cli {
-    /// Путь к конфиг-файлу
-    #[arg(short, long, global = true, default_value = "config.toml")]
-    pub config: String,
-
     #[command(subcommand)]
-    pub command: Option<Command>,
+    pub command: Command,
 }
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Проанализировать логи
-    Analyze {
-        /// Путь к лог-файлу
-        #[arg(short, long, default_value = "poller.log")]
-        log_file: String,
-
-        /// Детальный вывод
-        #[arg(short, long, action)]
-        detailed: bool,
+    /// Запускает монитор
+    Start {
+        /// Путь к конфиг-файлу
+        #[arg(short, long, default_value = "config.toml")]
+        config: String,
     },
 
     /// Сгенерировать дефолтный конфиг
@@ -41,4 +33,19 @@ pub enum Command {
         #[arg(long, short = 's', action)]
         show: bool,
     },
+
+    ProcessLog {
+        /// Путь к файлу лога для чтения
+        #[arg(short, long, default_value = "monitor.json")]
+        log: String,
+
+        /// Формат вывода: csv, console
+        format: OutputFormat,
+    },
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum OutputFormat {
+    Csv,
+    Console,
 }

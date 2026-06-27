@@ -20,7 +20,7 @@ impl fmt::Display for Strategy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PollType {
     Ping,
@@ -81,7 +81,7 @@ pub enum Event {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(tag = "strategy", rename_all = "snake_case")]
 pub enum ConfigStrategyDetails {
     Independent {
         pollers: Vec<IndependentPollerConfig>,
