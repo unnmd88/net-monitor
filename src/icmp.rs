@@ -9,12 +9,14 @@ use std::net::IpAddr;
 use std::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
-use trippy_core::{Builder, Protocol};
+use tracing_subscriber::fmt::format::json;
 
 use crate::constants::TIME_FMT;
 use crate::models::Strategy;
 use crate::models::{Event, PollType, ProviderConfig};
 use crate::traits::Pollable;
+use crate::traits::TracerouteProvider;
+use trippy_core::{Builder, Protocol};
 
 #[derive(Debug, Serialize)]
 pub struct TracertProvider {
@@ -101,7 +103,6 @@ pub struct IcmpProvider {
     username: String,
     pub target: IpAddr,
     requestor: IcmpEchoRequestor,
-    tracert: Option<TracertProvider>,
     pub timeout_ms: u64,
 }
 
@@ -110,7 +111,6 @@ impl IcmpProvider {
         username: String,
         target: IpAddr,
         timeout_ms: u64,
-        tracert: Option<TracertProvider>,
     ) -> Result<Self, String> {
         let requestor = IcmpEchoRequestor::new(
             target,
@@ -125,7 +125,6 @@ impl IcmpProvider {
             username,
             target,
             requestor,
-            tracert,
             timeout_ms,
         })
     }
@@ -157,16 +156,20 @@ impl IcmpProvider {
     }
 
     fn get_extra(&self) -> Option<serde_json::Value> {
-        self.tracert.as_ref().and_then(|t| {
-            serde_json::to_value(t)
-                .ok()
-                .map(|v| json!({"tracert": v}))
-        })
+        Some(serde_json::Value::Null)
+
+        /*
+
+                self.tracert.as_ref().and_then(|t| {
+                    serde_json::to_value(t)
+                        .ok()
+                        .map(|v| json!({"tracert": v}))
+                })
+        */
     }
 
     pub fn dump(&self) -> ProviderConfig {
-        ProviderConfig {
-            poll_type: self.whoami(),
+        ProviderConfig::Ping {
             username: self.username(),
             target: self.target,
             timeout_ms: self.timeout_ms,

@@ -1,44 +1,27 @@
-mod config;
+use net_monitor::cli::{Cli, Command, OutputFormat};
+use net_monitor::config::{
+    Config, IndependentPingInstance, IndependentSnmpInstance, Provider,
+};
+use net_monitor::icmp::{IcmpProvider, TracertProvider};
+use net_monitor::log_parser::LogParser;
+use net_monitor::models::{
+    Event, IndependentConfigDetails, IndependentPollerConfig, PollType,
+    Strategy, SynchronizedConfigDetails, TracerouteEngine,
+};
+use net_monitor::poller::{IndependentPoller, PollConfig, SynchronizedPoller};
+use net_monitor::sender::{EventSender, JsonSender};
+use net_monitor::snmp::SnmpProvider;
+use net_monitor::traceroute::TrippyTracertProvider;
+use net_monitor::traits::{Pollable, TracerouteProvider};
+use net_monitor::utils::{get_session_id, get_timestamp_fmt};
+use net_monitor::{event_loop, logging};
+
 use clap::{Parser, builder::Str};
 use serde_json::json;
-mod cli;
-mod constants;
-mod event_loop;
-mod icmp;
-mod log_parser;
-mod logging;
-mod models;
-mod poller;
-mod sender;
-mod snmp;
-mod traits;
-mod utils;
-
-use std::{fmt::format, fs::File, net::IpAddr, task::Poll, time::Duration};
+use std::time::Duration;
+use std::{fmt::format, fs::File, net::IpAddr};
 use tokio::sync::mpsc::{self};
 use tracing::{error, info};
-
-use crate::{
-    cli::{Cli, Command, OutputFormat},
-    config::{
-        Config, IndependentPingInstance, IndependentSnmpInstance,
-        IndependentTracertInstance,
-    },
-    icmp::{IcmpProvider, TracertProvider},
-    log_parser::LogParser,
-    models::{
-        ConfigStrategyDetails,
-        Event,
-        IndependentPollerConfig,
-        PollType,
-        Strategy, //SynchronizedProviderConfig,
-    },
-    poller::{IndependentPoller, PollConfig, SynchronizedPoller},
-    sender::{EventSender, JsonSender},
-    snmp::SnmpProvider,
-    traits::Pollable,
-    utils::{get_session_id, get_timestamp_fmt},
-};
 
 type Senders = Vec<Box<dyn EventSender + Send>>;
 
@@ -123,18 +106,45 @@ async fn init_icmp_provider(
 ) -> Result<IcmpProvider, String> {
     //let tracert = init_tracert(&config)?;
 
-    let icmp_provider =
-        match IcmpProvider::new(username, target, timeout_ms, None) {
-            Ok(provider) => provider,
-            Err(e) => {
-                let err = format!("{ICMP_PROVIDER} {INIT_FAILED}: {e}");
-                error!("{}", err);
-                return Err(err);
-            }
-        };
+    let icmp_provider = match IcmpProvider::new(username, target, timeout_ms) {
+        Ok(provider) => provider,
+        Err(e) => {
+            let err = format!("{ICMP_PROVIDER} {INIT_FAILED}: {e}");
+            error!("{}", err);
+            return Err(err);
+        }
+    };
 
     info!("{ICMP_PROVIDER} {INIT_SUCCESSFULLY}");
     Ok(icmp_provider)
+}
+
+async fn init_tracert_provider(
+    engine: TracerouteEngine,
+    username: String,
+    target: IpAddr,
+    timeout_ms: u64,
+    max_hops: u8,
+    queries_per_hop: u8,
+) -> Result<Box<dyn Pollable>, String> {
+    let p = match engine {
+        TracerouteEngine::Trippy => {
+            let provider = TrippyTracertProvider::new(
+                username,
+                target,
+                max_hops,
+                queries_per_hop,
+            )
+            .await;
+            Box::new(provider)
+        }
+        TracerouteEngine::System => {
+            eprintln!("TracerouteEngine::System not implemented");
+            error!("TracerouteEngine::System not implemented");
+            std::process::exit(1)
+        }
+    };
+    Ok(p)
 }
 
 async fn init_snmp_provider(
@@ -165,14 +175,62 @@ fn create_independent_poller(
     provider: Box<dyn Pollable>,
     interval_ms: u64,
     poll_config: PollConfig,
+    fallback: Option<Box<dyn Pollable>>,
     tx: mpsc::Sender<Event>,
 ) -> IndependentPoller {
     let provider_whoami = provider.whoami();
-    let poller = IndependentPoller::new(provider, interval_ms, poll_config, tx);
+    let poller = IndependentPoller::new(
+        provider,
+        interval_ms,
+        poll_config,
+        fallback,
+        tx,
+    );
     info!(
         "IndependentPoller created successfully. Provider: {provider_whoami}",
     );
     poller
+}
+
+async fn try_create_fallback(
+    fb_provider: Option<Provider>,
+) -> Result<Option<Box<dyn Pollable>>, String> {
+    let fb: Option<Box<dyn Pollable>> = match fb_provider {
+        Some(fallback) => match fallback {
+            Provider::Ping(cfg) => {
+                let provider =
+                    init_icmp_provider(cfg.name, cfg.target, cfg.timeout_ms)
+                        .await?;
+                Some(Box::new(provider))
+            }
+            Provider::Snmp(cfg) => {
+                let provider = init_snmp_provider(
+                    cfg.name,
+                    cfg.target,
+                    cfg.timeout_ms,
+                    cfg.port,
+                    cfg.community.clone(),
+                    cfg.oids.clone(),
+                )
+                .await?;
+                Some(Box::new(provider))
+            }
+            Provider::Tracert(cfg) => {
+                let provider = init_tracert_provider(
+                    cfg.engine,
+                    cfg.name,
+                    cfg.target,
+                    cfg.timeout_ms,
+                    cfg.max_hops,
+                    cfg.queries_per_hop,
+                )
+                .await?;
+                Some(provider)
+            }
+        },
+        None => None,
+    };
+    Ok(fb)
 }
 
 fn spawn_independent_poll(
@@ -286,6 +344,8 @@ async fn app(config: Config, session_id: String) -> Result<(), String> {
     tokio::spawn(event_loop::handle_events(rx, senders));
     tokio::time::sleep(Duration::from_millis(20)).await;
 
+    let mut independent_pollers: Vec<IndependentPoller> = Vec::new();
+    let mut synchronized_poller: Option<SynchronizedPoller> = None;
     let mut spawned_tasks = Vec::new();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -293,36 +353,45 @@ async fn app(config: Config, session_id: String) -> Result<(), String> {
         println!("Настройка стратегии: {}", Strategy::Independent);
         info!("Setup {:?} strategy.", Strategy::Independent);
         // let mut providers: Vec<Box<dyn Pollable>> = Vec::new();
-        let mut pollers: Vec<IndependentPoller> = Vec::new();
 
         for ping_instance in config.independent.ping {
+            if !ping_instance.enabled {
+                continue;
+            }
+
             let provider = init_icmp_provider(
-                ping_instance.name,
-                ping_instance.target,
-                ping_instance.timeout_ms,
+                ping_instance.config.name,
+                ping_instance.config.target,
+                ping_instance.config.timeout_ms,
             )
             .await?;
+
             let poll_config = PollConfig {
                 retries: ping_instance.retries,
                 retries_delay_ms: ping_instance.retries_delay_ms,
             };
+
+            let fb: Option<Box<dyn Pollable>> =
+                try_create_fallback(ping_instance.fallback).await?;
+
             let poller = create_independent_poller(
                 Box::new(provider),
                 ping_instance.interval_ms,
                 poll_config,
+                fb,
                 tx.clone(),
             );
-            pollers.push(poller);
+            independent_pollers.push(poller);
         }
 
         for snmp_instance in config.independent.snmp {
             let provider = init_snmp_provider(
-                snmp_instance.name,
-                snmp_instance.target,
-                snmp_instance.timeout_ms,
-                snmp_instance.port,
-                snmp_instance.community.clone(),
-                snmp_instance.oids.clone(),
+                snmp_instance.config.name,
+                snmp_instance.config.target,
+                snmp_instance.config.timeout_ms,
+                snmp_instance.config.port,
+                snmp_instance.config.community.clone(),
+                snmp_instance.config.oids.clone(),
             )
             .await?;
             let timings = PollConfig {
@@ -330,45 +399,55 @@ async fn app(config: Config, session_id: String) -> Result<(), String> {
                 retries_delay_ms: snmp_instance.retries_delay_ms,
             };
 
+            let fb: Option<Box<dyn Pollable>> =
+                try_create_fallback(snmp_instance.fallback).await?;
+
             let poller = create_independent_poller(
                 Box::new(provider),
                 snmp_instance.interval_ms,
                 timings,
+                fb,
                 tx.clone(),
             );
-            pollers.push(poller);
+            independent_pollers.push(poller);
         }
+
+        let config_details = IndependentConfigDetails::new(
+            independent_pollers
+                .iter()
+                .map(|poller| poller.dump())
+                .collect(),
+        )
+        .as_json()
+        .map_err(|e| {
+            error!("Failed to serialize independent config: {}", e);
+            e.to_string() // ← конвертируем в String для возврата ошибки
+        })?;
 
         let config_event = Event::Config {
             strategy: Strategy::Independent,
-            details: ConfigStrategyDetails::Independent {
-                num_pollers: pollers.len() as u8,
-                pollers: pollers
-                    .iter()
-                    .map(|poller| poller.dump())
-                    .collect(),
-            },
+            details: config_details,
         };
         tx.send(config_event)
             .await
             .map_err(|e| e.to_string())?;
-
-        for p in pollers {
-            spawned_tasks.push(spawn_independent_poll(p));
-        }
     }
 
     if config.synchronized_enabled {
         println!("Настройка стратегии: {}", Strategy::Synchronized);
         info!("Setup {:?} strategy.", Strategy::Synchronized);
 
-        let mut providers: Vec<(Box<dyn Pollable>, PollConfig)> = Vec::new();
+        let mut providers: Vec<(
+            Box<dyn Pollable>,
+            PollConfig,
+            Option<Box<dyn Pollable>>,
+        )> = Vec::new();
 
         for ping_instance in config.synchronized.ping {
             let provider = init_icmp_provider(
-                ping_instance.name,
-                ping_instance.target,
-                ping_instance.timeout_ms,
+                ping_instance.config.name,
+                ping_instance.config.target,
+                ping_instance.config.timeout_ms,
             )
             .await?;
             let poll_config = PollConfig {
@@ -376,7 +455,9 @@ async fn app(config: Config, session_id: String) -> Result<(), String> {
                 retries_delay_ms: ping_instance.retries_delay_ms,
             };
             let provider_whoami = provider.whoami();
-            providers.push((Box::new(provider), poll_config));
+            let fb: Option<Box<dyn Pollable>> =
+                try_create_fallback(ping_instance.fallback).await?;
+            providers.push((Box::new(provider), poll_config, fb));
             info!(
                 "Added {} provider for {} strategy.",
                 provider_whoami,
@@ -386,19 +467,21 @@ async fn app(config: Config, session_id: String) -> Result<(), String> {
 
         for snmp_instance in config.synchronized.snmp {
             let provider = init_snmp_provider(
-                snmp_instance.name,
-                snmp_instance.target,
-                snmp_instance.timeout_ms,
-                snmp_instance.port,
-                snmp_instance.community.clone(),
-                snmp_instance.oids.clone(),
+                snmp_instance.config.name,
+                snmp_instance.config.target,
+                snmp_instance.config.timeout_ms,
+                snmp_instance.config.port,
+                snmp_instance.config.community.clone(),
+                snmp_instance.config.oids.clone(),
             )
             .await?;
             let poll_config = PollConfig {
                 retries: snmp_instance.retries,
                 retries_delay_ms: snmp_instance.retries_delay_ms,
             };
-            providers.push((Box::new(provider), poll_config));
+            let fb: Option<Box<dyn Pollable>> =
+                try_create_fallback(snmp_instance.fallback).await?;
+            providers.push((Box::new(provider), poll_config, fb));
         }
 
         let poller = SynchronizedPoller::new(
@@ -412,152 +495,30 @@ async fn app(config: Config, session_id: String) -> Result<(), String> {
             Strategy::Synchronized
         );
 
+        let config_details = poller.dump().as_json().map_err(|e| {
+            error!("Failed to serialize synchronized config: {}", e);
+            e.to_string()
+        })?;
+
         let config_event = Event::Config {
             strategy: Strategy::Synchronized,
-            details: ConfigStrategyDetails::Synchronized {
-                config: poller.dump(),
-            },
+            details: config_details,
         };
 
         tx.send(config_event)
             .await
             .map_err(|e| e.to_string())?;
 
-        spawned_tasks.push(spawn_synchronized_poll(poller));
+        synchronized_poller = Some(poller);
     }
 
-    /*
-        match current_strategy {
-            Strategy::Independent => {
-                // let mut providers: Vec<Box<dyn Pollable>> = Vec::new();
-                let mut pollers: Vec<IndependentPoller> = Vec::new();
+    for p in independent_pollers {
+        spawned_tasks.push(spawn_independent_poll(p));
+    }
 
-                for ping_instance in config.independent.ping {
-                    let provider = init_icmp_provider(
-                        ping_instance.name,
-                        config.network.target,
-                        ping_instance.timeout_ms,
-                    )
-                    .await?;
-                    let poll_config = PollConfig {
-                        retries: ping_instance.retries,
-                        retries_delay_ms: ping_instance.retries_delay_ms,
-                    };
-                    let poller = create_independent_poller(
-                        Box::new(provider),
-                        ping_instance.interval_ms,
-                        poll_config,
-                        tx.clone(),
-                    );
-                    pollers.push(poller);
-                }
-
-                for snmp_instance in config.independent.snmp {
-                    let provider = init_snmp_provider(
-                        snmp_instance.name,
-                        config.network.target,
-                        snmp_instance.timeout_ms,
-                        snmp_instance.port,
-                        snmp_instance.community.clone(),
-                        snmp_instance.oids.clone(),
-                    )
-                    .await?;
-                    let timings = PollConfig {
-                        retries: snmp_instance.retries,
-                        retries_delay_ms: snmp_instance.retries_delay_ms,
-                    };
-
-                    let poller = create_independent_poller(
-                        Box::new(provider),
-                        snmp_instance.interval_ms,
-                        timings,
-                        tx.clone(),
-                    );
-                    pollers.push(poller);
-                }
-
-                let config_event = Event::Config {
-                    strategy: Strategy::Independent,
-                    details: ConfigStrategyDetails::Independent {
-                        num_pollers: pollers.len() as u8,
-                        pollers: pollers
-                            .iter()
-                            .map(|poller| poller.dump())
-                            .collect(),
-                    },
-                };
-                tx.send(config_event)
-                    .await
-                    .map_err(|e| e.to_string())?;
-
-                for p in pollers {
-                    spawned_tasks.push(spawn_independent_poll(p));
-                }
-            }
-
-            Strategy::Synchronized => {
-                let mut providers: Vec<(Box<dyn Pollable>, PollConfig)> =
-                    Vec::new();
-
-                for ping_instance in config.synchronized.ping {
-                    let provider = init_icmp_provider(
-                        ping_instance.name,
-                        config.network.target,
-                        ping_instance.timeout_ms,
-                    )
-                    .await?;
-                    let poll_config = PollConfig {
-                        retries: ping_instance.retries,
-                        retries_delay_ms: ping_instance.retries_delay_ms,
-                    };
-                    let provider_whoami = provider.whoami();
-                    providers.push((Box::new(provider), poll_config));
-                    info!(
-                        "Added {} provider for {} strategy.",
-                        provider_whoami, &current_strategy
-                    );
-                }
-
-                for snmp_instance in config.synchronized.snmp {
-                    let provider = init_snmp_provider(
-                        snmp_instance.name,
-                        config.network.target,
-                        snmp_instance.timeout_ms,
-                        snmp_instance.port,
-                        snmp_instance.community.clone(),
-                        snmp_instance.oids.clone(),
-                    )
-                    .await?;
-                    let poll_config = PollConfig {
-                        retries: snmp_instance.retries,
-                        retries_delay_ms: snmp_instance.retries_delay_ms,
-                    };
-                    providers.push((Box::new(provider), poll_config));
-                }
-
-                let poller = SynchronizedPoller::new(
-                    providers,
-                    config.synchronized.interval_ms,
-                    tx.clone(),
-                );
-
-                info!("{} strtegy poller created successfully.", current_strategy);
-
-                let config_event = Event::Config {
-                    strategy: current_strategy,
-                    details: ConfigStrategyDetails::Synchronized {
-                        config: poller.dump(),
-                    },
-                };
-
-                tx.send(config_event)
-                    .await
-                    .map_err(|e| e.to_string())?;
-
-                spawned_tasks.push(spawn_synchronized_poll(poller));
-            }
-        }
-    */
+    if let Some(p) = synchronized_poller {
+        spawned_tasks.push(spawn_synchronized_poll(p));
+    }
 
     if spawned_tasks.is_empty() {
         return Err("Нет задач для опроса. Монитор не запущен.".to_string());

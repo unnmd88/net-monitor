@@ -31,6 +31,26 @@ pub struct PollPayload {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigRecord {
+    Independent(IndependentConfig),
+    Synchronized(SynchronizedConfig),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IndependentConfig {
+    pub pollers: Vec<PollerConfig>,
+    pub num_pollers: u8,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SynchronizedConfig {
+    pub providers: Vec<ProviderConfig>,
+    pub interval_ms: u64,
+    pub num_providers: u8,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LogRecord {
     PollResult {
@@ -45,22 +65,8 @@ pub enum LogRecord {
         session_id: String,
         timestamp: String,
         strategy: Strategy,
-        #[serde(flatten)]
-        config: ConfigRecord,
-    },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "strategy", rename_all = "snake_case")]
-pub enum ConfigRecord {
-    Independent {
-        pollers: Vec<PollerConfig>,
-        num_pollers: u8,
-    },
-    Synchronized {
-        providers: Vec<ProviderConfig>,
-        interval_ms: u64,
-        num_providers: u8,
+        //#[serde(flatten)]
+        details: serde_json::Value,
     },
 }
 
@@ -109,7 +115,7 @@ struct CsvRecordPollDto {
 struct CsvRecordConfigDto {
     session_id: String,
     timestamp: String,
-    strategy: String,
+    strategy: Strategy,
     step: String,
     username: String,
     whoami: String,
@@ -202,16 +208,21 @@ impl LogWriter for CsvWriter {
                 session_id,
                 timestamp,
                 strategy,
-                config,
+                details,
             } => {
-                let config_json = serde_json::to_string_pretty(&config)
-                    .unwrap_or_else(|_| {
-                        "Failed to serialize config".to_string()
-                    });
+                let pretty_details = serde_json::to_string_pretty(&details)
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Невалидный JSON в details: {}\nRaw: {}",
+                            e,
+                            details
+                        )
+                    })?;
+
                 let record = CsvRecordConfigDto {
                     session_id,
                     timestamp,
-                    strategy: "".to_string(),
+                    strategy,
                     step: "".to_string(),
                     username: "".to_string(),
                     whoami: "session-config".to_string(),
@@ -221,7 +232,7 @@ impl LogWriter for CsvWriter {
                     success: "".to_string(),
                     attempts: "".to_string(),
                     latency_ms: "".to_string(),
-                    details: config_json,
+                    details: pretty_details,
                 };
                 self.writer
                     .serialize(record)

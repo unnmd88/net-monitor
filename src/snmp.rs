@@ -85,18 +85,16 @@ impl SnmpProvider {
     }
 
     fn get_extra(&self) -> Option<serde_json::Value> {
-        Some(json!({
-            "port": self.port,
-            "oids": self.get_oids(),
-        }))
+        None
     }
 
     pub fn dump(&self) -> ProviderConfig {
-        ProviderConfig {
-            poll_type: self.whoami(),
-            username: self.username(),
+        ProviderConfig::Snmp {
+            username: (self.username()),
             target: self.target,
             timeout_ms: self.timeout_ms,
+            port: self.port,
+            oids: self.get_oids(),
             extra: self.get_extra(),
         }
     }

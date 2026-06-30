@@ -2,6 +2,8 @@ use serde::Deserialize;
 use std::net::IpAddr;
 use tracing::info;
 
+use crate::models::TracerouteEngine;
+
 // ============================================
 // CONFIG
 // ============================================
@@ -163,8 +165,88 @@ queries_per_hop = 1
 }
 
 // ============================================
+// BASE PROVIDER CONFIGS
+// ============================================
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct PingConfig {
+    pub name: String,
+    pub target: IpAddr,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SnmpConfig {
+    pub name: String,
+    pub target: IpAddr,
+    pub timeout_ms: u64,
+    pub port: u16,
+    pub community: String,
+    pub oids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TracertConfig {
+    pub name: String,
+    pub target: IpAddr,
+    pub engine: TracerouteEngine,
+    pub max_hops: u8,
+    pub queries_per_hop: u8,
+    pub timeout_ms: u64,
+}
+
+// ============================================
+// PROVIDER ENUM
+// ============================================
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum Provider {
+    Ping(PingConfig),
+    Snmp(SnmpConfig),
+    Tracert(TracertConfig),
+}
+
+// ============================================
 // INDEPENDENT STRATEGY
 // ============================================
+
+#[derive(Debug, Deserialize)]
+pub struct IndependentPingInstance {
+    pub enabled: bool,
+    pub interval_ms: u64,
+    pub retries: u8,
+    pub retries_delay_ms: u64,
+    #[serde(flatten)]
+    pub config: PingConfig,
+    #[serde(default)]
+    pub fallback: Option<Provider>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IndependentSnmpInstance {
+    pub enabled: bool,
+    pub interval_ms: u64,
+    pub retries: u8,
+    pub retries_delay_ms: u64,
+    #[serde(flatten)]
+    pub config: SnmpConfig,
+    #[serde(default)]
+    pub fallback: Option<Provider>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IndependentTracertInstance {
+    pub enabled: bool,
+    pub interval_ms: u64,
+    pub retries: u8,
+    pub retries_delay_ms: u64,
+    #[serde(flatten)]
+    pub config: TracertConfig,
+    #[serde(default)]
+    pub fallback: Option<Provider>,
+}
+
 #[derive(Debug, Deserialize, Default)]
 pub struct IndependentStrategyConfig {
     pub ping: Vec<IndependentPingInstance>,
@@ -172,51 +254,43 @@ pub struct IndependentStrategyConfig {
     pub tracert: Vec<IndependentTracertInstance>,
 }
 
-// ---------- PING ----------
-#[derive(Debug, Deserialize)]
-pub struct IndependentPingInstance {
-    pub enabled: bool,
-    pub name: String,
-    pub target: IpAddr,
-    pub interval_ms: u64,
-    pub timeout_ms: u64,
-    pub retries: u8,
-    pub retries_delay_ms: u64,
-    #[serde(default)]
-    pub fallback_tracert: Option<FallbackTracertConfig>,
-}
-
-// ---------- SNMP ----------
-#[derive(Debug, Deserialize)]
-pub struct IndependentSnmpInstance {
-    pub enabled: bool,
-    pub name: String,
-    pub target: IpAddr,
-    pub interval_ms: u64,
-    pub timeout_ms: u64,
-    pub port: u16,
-    pub community: String,
-    pub retries: u8,
-    pub retries_delay_ms: u64,
-    pub oids: Vec<String>,
-    #[serde(default)]
-    pub fallback_tracert: Option<FallbackTracertConfig>,
-}
-
-// ---------- TRACERT ----------
-#[derive(Debug, Deserialize)]
-pub struct IndependentTracertInstance {
-    pub enabled: bool,
-    pub name: String,
-    pub target: IpAddr,
-    pub interval_ms: u64,
-    pub max_hops: u8,
-    pub queries_per_hop: u8,
-}
-
 // ============================================
 // SYNCHRONIZED STRATEGY
 // ============================================
+
+#[derive(Debug, Deserialize)]
+pub struct SynchronizedPingInstance {
+    pub enabled: bool,
+    pub retries: u8,
+    pub retries_delay_ms: u64,
+    #[serde(flatten)]
+    pub config: PingConfig,
+    #[serde(default)]
+    pub fallback: Option<Provider>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SynchronizedSnmpInstance {
+    pub enabled: bool,
+    pub retries: u8,
+    pub retries_delay_ms: u64,
+    #[serde(flatten)]
+    pub config: SnmpConfig,
+    #[serde(default)]
+    pub fallback: Option<Provider>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SynchronizedTracertInstance {
+    pub enabled: bool,
+    pub retries: u8,
+    pub retries_delay_ms: u64,
+    #[serde(flatten)]
+    pub config: TracertConfig,
+    #[serde(default)]
+    pub fallback: Option<Provider>,
+}
+
 #[derive(Debug, Deserialize, Default)]
 pub struct SynchronizedStrategyConfig {
     pub enabled: bool,
@@ -224,64 +298,6 @@ pub struct SynchronizedStrategyConfig {
     pub ping: Vec<SynchronizedPingInstance>,
     pub snmp: Vec<SynchronizedSnmpInstance>,
     pub tracert: Vec<SynchronizedTracertInstance>,
-}
-
-// ---------- PING ----------
-#[derive(Debug, Deserialize)]
-pub struct SynchronizedPingInstance {
-    pub enabled: bool,
-    pub name: String,
-    pub target: IpAddr,
-    pub timeout_ms: u64,
-    pub retries: u8,
-    pub retries_delay_ms: u64,
-    #[serde(default)]
-    pub fallback_tracert: Option<FallbackTracertConfig>,
-}
-
-// ---------- SNMP ----------
-#[derive(Debug, Deserialize)]
-pub struct SynchronizedSnmpInstance {
-    pub enabled: bool,
-    pub name: String,
-    pub target: IpAddr,
-    pub timeout_ms: u64,
-    pub port: u16,
-    pub community: String,
-    pub retries: u8,
-    pub retries_delay_ms: u64,
-    pub oids: Vec<String>,
-    #[serde(default)]
-    pub fallback_tracert: Option<FallbackTracertConfig>,
-}
-
-// ---------- TRACERT ----------
-#[derive(Debug, Deserialize)]
-pub struct SynchronizedTracertInstance {
-    pub enabled: bool,
-    pub name: String,
-    pub target: IpAddr,
-    pub max_hops: u8,
-    pub queries_per_hop: u8,
-}
-
-// ============================================
-// FALLBACK TRACEROUTE (НОВОЕ)
-// ============================================
-#[derive(Debug, Deserialize, Clone)]
-#[serde(rename_all = "lowercase")]
-pub enum TracertType {
-    Library,
-    System,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct FallbackTracertConfig {
-    #[serde(rename = "type")]
-    pub tracert_type: TracertType,
-    pub max_hops: u8,
-    pub queries_per_hop: u8,
-    pub timeout_ms: u64,
 }
 
 // ============================================

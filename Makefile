@@ -39,3 +39,8 @@ build-release-win7:
 objdump:
 	objdump -p target/x86_64-win7-windows-msvc/release/traffic-api.exe | grep "DLL Name"
 
+.PHONY: example-traceroute
+example-traceroute:
+	cargo build --target x86_64-unknown-linux-gnu --example test_traceroute
+	sudo setcap cap_net_raw+ep target/x86_64-unknown-linux-gnu/debug/examples/test_traceroute
+	./target/x86_64-unknown-linux-gnu/debug/examples/test_traceroute

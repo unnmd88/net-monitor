@@ -1,12 +1,13 @@
 use std::{fmt, net::IpAddr};
 
+use clap::builder::Str;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
 pub enum Strategy {
-    #[serde(rename = "independent")]
     Independent,
-    #[serde(rename = "synchronized")]
     Synchronized,
 }
 
@@ -25,6 +26,7 @@ impl fmt::Display for Strategy {
 pub enum PollType {
     Ping,
     Snmp,
+    Traceroute,
 }
 
 impl fmt::Display for PollType {
@@ -32,8 +34,16 @@ impl fmt::Display for PollType {
         match self {
             PollType::Ping => write!(f, "PING"),
             PollType::Snmp => write!(f, "SNMP"),
+            PollType::Traceroute => write!(f, "TRACEROUTE"),
         }
     }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum TracerouteEngine {
+    Trippy,
+    System,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,26 +80,13 @@ pub enum Event {
 
     Config {
         strategy: Strategy,
-        #[serde(flatten)]
-        details: ConfigStrategyDetails,
+        // #[serde(flatten)]
+        details: serde_json::Value,
     },
 
     Error {
         error_type: String,
         message: String,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "strategy", rename_all = "snake_case")]
-pub enum ConfigStrategyDetails {
-    Independent {
-        pollers: Vec<IndependentPollerConfig>,
-        num_pollers: u8,
-    },
-    Synchronized {
-        #[serde(flatten)]
-        config: SynchronizedPollerConfig,
     },
 }
 
@@ -100,21 +97,85 @@ pub struct IndependentPollerConfig {
     pub retries: u8,
     pub retries_interval_ms: u64,
     pub interval_ms: u64,
+    pub fallback: Option<ProviderConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct IndependentConfigDetails {
+    pub pollers: Vec<IndependentPollerConfig>,
+    pub num_pollers: u8,
+}
+
+impl IndependentConfigDetails {
+    pub fn new(pollers: Vec<IndependentPollerConfig>) -> Self {
+        Self {
+            num_pollers: pollers.len() as u8,
+            pollers,
+        }
+    }
+
+    pub fn as_json(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(&self)?)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SynchronizedPollerConfig {
-    pub providers: Vec<ProviderConfig>,
+pub struct SynchronizedProviderConfig {
+    pub provider: ProviderConfig,
+    pub fallback: Option<ProviderConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SynchronizedConfigDetails {
+    pub providers: Vec<SynchronizedProviderConfig>,
     pub interval_ms: u64,
     pub num_providers: u8,
 }
 
+impl SynchronizedConfigDetails {
+    pub fn new(
+        providers: Vec<SynchronizedProviderConfig>,
+        interval_ms: u64,
+    ) -> Self {
+        Self {
+            interval_ms,
+            num_providers: providers.len() as u8,
+            providers,
+        }
+    }
+
+    pub fn as_json(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(&self)?)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ProviderConfig {
-    #[serde(rename = "type")]
-    pub poll_type: PollType,
-    pub username: String,
-    pub target: IpAddr,
-    pub timeout_ms: u64,
-    pub extra: Option<serde_json::Value>,
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ProviderConfig {
+    Ping {
+        username: String,
+        target: IpAddr,
+        timeout_ms: u64,
+        extra: Option<serde_json::Value>,
+    },
+    Snmp {
+        username: String,
+        target: IpAddr,
+        timeout_ms: u64,
+        port: u16,
+        //   community: String,
+        oids: Vec<String>,
+        extra: Option<serde_json::Value>,
+    },
+    Traceroute {
+        username: String,
+        target: IpAddr,
+        timeout_ms: u64,
+        engine: TracerouteEngine,
+        max_hops: u8,
+        queries_per_hop: u8,
+        extra: Option<serde_json::Value>,
+    },
 }

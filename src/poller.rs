@@ -2,7 +2,7 @@ use crate::config;
 use crate::constants::TIME_FMT;
 use crate::models::{
     Event, FetchResult, IndependentPollerConfig, Strategy,
-    SynchronizedPollerConfig,
+    SynchronizedConfigDetails, SynchronizedProviderConfig,
 };
 use crate::traits::Pollable;
 use chrono::Local;
@@ -16,6 +16,7 @@ use tracing::{error, info};
 async fn poll_with_retries(
     provider: &dyn Pollable,
     poll_config: &PollConfig,
+    fallback: Option<&dyn Pollable>,
 ) -> FetchResult {
     let now = Local::now();
     let started_at = now.format(TIME_FMT).to_string();
@@ -49,6 +50,11 @@ async fn poll_with_retries(
         }
     }
 
+    if !success && let Some(fb) = fallback {
+        let fb_result = fb.fetch().await.unwrap_or_else(|e| e);
+        details.push(format!("Fallback: {}", fb_result));
+    }
+
     let latency_ms = start_point.elapsed().as_secs_f64() * 1000.0;
     let finished_at = Local::now()
         .format(TIME_FMT)
@@ -76,6 +82,7 @@ pub struct PollConfig {
 
 pub struct IndependentPoller {
     provider: Box<dyn Pollable>,
+    fallback: Option<Box<dyn Pollable>>,
     interval_ms: u64,
     poll_config: PollConfig,
     tx: mpsc::Sender<Event>,
@@ -86,12 +93,14 @@ impl IndependentPoller {
         provider: Box<dyn Pollable>,
         interval_ms: u64,
         poll_config: PollConfig,
+        fallback: Option<Box<dyn Pollable>>,
         tx: mpsc::Sender<Event>,
     ) -> Self {
         Self {
             provider,
             interval_ms,
             poll_config,
+            fallback,
             tx,
         }
     }
@@ -102,6 +111,7 @@ impl IndependentPoller {
             retries: self.poll_config.retries,
             retries_interval_ms: self.poll_config.retries_delay_ms,
             interval_ms: self.interval_ms,
+            fallback: self.fallback.as_ref().map(|f| f.dump()),
         }
     }
 
@@ -130,9 +140,12 @@ impl IndependentPoller {
         loop {
             interval.tick().await;
             step += 1;
-            let payload =
-                poll_with_retries(self.provider.as_ref(), &self.poll_config)
-                    .await;
+            let payload = poll_with_retries(
+                self.provider.as_ref(),
+                &self.poll_config,
+                self.fallback.as_deref(),
+            )
+            .await;
 
             let envelope = Event::PollResult {
                 strategy: Strategy::Independent,
@@ -147,14 +160,18 @@ impl IndependentPoller {
 }
 
 pub struct SynchronizedPoller {
-    providers: Vec<(Box<dyn Pollable>, PollConfig)>,
+    providers: Vec<(Box<dyn Pollable>, PollConfig, Option<Box<dyn Pollable>>)>,
     interval_ms: u64,
     tx: mpsc::Sender<Event>,
 }
 
 impl SynchronizedPoller {
     pub fn new(
-        providers: Vec<(Box<dyn Pollable>, PollConfig)>,
+        providers: Vec<(
+            Box<dyn Pollable>,
+            PollConfig,
+            Option<Box<dyn Pollable>>,
+        )>,
         interval_ms: u64,
         tx: mpsc::Sender<Event>,
     ) -> Self {
@@ -165,16 +182,21 @@ impl SynchronizedPoller {
         }
     }
 
-    pub fn dump(&self) -> SynchronizedPollerConfig {
-        SynchronizedPollerConfig {
-            providers: self
-                .providers
-                .iter()
-                .map(|(provider, config)| provider.dump())
-                .collect(),
-            interval_ms: self.interval_ms,
-            num_providers: self.providers.len() as u8,
-        }
+    pub fn num_providers(&self) -> u8 {
+        self.providers.len() as u8
+    }
+
+    pub fn dump(&self) -> SynchronizedConfigDetails {
+        let providers = self
+            .providers
+            .iter()
+            .map(|(provider, _, fallback)| SynchronizedProviderConfig {
+                provider: provider.dump(),
+                fallback: fallback.as_ref().map(|fb| fb.dump()),
+            })
+            .collect();
+
+        SynchronizedConfigDetails::new(providers, self.interval_ms)
     }
 
     pub fn interval_ms(&self) -> u64 {
@@ -200,7 +222,7 @@ impl SynchronizedPoller {
             self.providers.len(),
         );
 
-        for (i, (provider, config)) in self.providers.iter().enumerate() {
+        for (i, (provider, config, fb)) in self.providers.iter().enumerate() {
             let cnt = i + 1;
             let name = provider.whoami();
 
@@ -222,8 +244,12 @@ impl SynchronizedPoller {
             interval.tick().await;
             step += 1;
             let mut futures = FuturesUnordered::new();
-            for (provider, config) in &self.providers {
-                futures.push(poll_with_retries(provider.as_ref(), &config));
+            for (provider, config, fb) in &self.providers {
+                futures.push(poll_with_retries(
+                    provider.as_ref(),
+                    &config,
+                    fb.as_deref(),
+                ));
             }
 
             while let Some(payload) = futures.next().await {
